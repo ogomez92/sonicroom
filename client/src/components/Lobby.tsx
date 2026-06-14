@@ -25,6 +25,13 @@ function isPublicEnabled(value: string | null): boolean {
   return ["true", "1", "yes", "on", "enable", "enabled", "public"].includes(value.toLowerCase());
 }
 
+// `?mic=off` (also accepts false/0/no/disable/disabled) pre-ticks the "Join
+// without a microphone" toggle from a shared link.
+function isMicDisabled(value: string | null): boolean {
+  if (value == null) return false;
+  return ["off", "false", "0", "no", "disable", "disabled"].includes(value.toLowerCase());
+}
+
 interface PublicRoom {
   name: string;
   participants: string[];
@@ -42,6 +49,9 @@ export function Lobby() {
   const [displayName, setDisplayName] = useState("");
   const [disableP2p, setDisableP2p] = useState(() => isP2pDisabled(searchParams.get("p2p")));
   const [makePublic, setMakePublic] = useState(() => isPublicEnabled(searchParams.get("public")));
+  const [joinWithoutMic, setJoinWithoutMic] = useState(() =>
+    isMicDisabled(searchParams.get("mic")),
+  );
   const [publicRooms, setPublicRooms] = useState<PublicRoom[]>([]);
   // Roving active option in the public-room listbox (-1 = none yet), mirroring
   // the chat message list's keyboard model. Tracked by index and clamped as the
@@ -179,10 +189,12 @@ export function Lobby() {
       const params = new URLSearchParams();
       if (disableP2p) params.set("p2p", "off");
       if (makePublic) params.set("public", "true");
+      // Listen + text-chat only — no mic prompt (see Room's ?mic=off handling).
+      if (joinWithoutMic) params.set("mic", "off");
       const qs = params.toString();
       navigate(`/room/${sanitizedRoom}${qs ? `?${qs}` : ""}`);
     },
-    [roomName, displayName, navigate, disableP2p, makePublic],
+    [roomName, displayName, navigate, disableP2p, makePublic, joinWithoutMic],
   );
 
   // Localized participant list ("a, b and c"), so the public room rows read
@@ -374,6 +386,24 @@ export function Lobby() {
                 {m.lobby_make_public_sticky()}
               </p>
             </div>
+
+            {/* Join without a microphone — for people who have no mic or can't /
+                won't speak. They listen and use text chat only; no mic prompt is
+                shown. (A missing or denied mic also falls back to this mode.) */}
+            <label className="flex cursor-pointer select-none items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={joinWithoutMic}
+                onChange={(e) => setJoinWithoutMic(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-sonic-600 bg-sonic-700 accent-sonic-accent"
+              />
+              <span className="text-sm font-medium text-sonic-200">
+                {m.lobby_join_without_mic()}
+                <span className="mt-0.5 block text-xs font-normal text-sonic-400">
+                  {m.lobby_join_without_mic_help()}
+                </span>
+              </span>
+            </label>
 
             {error && (
               <p id="lobby-error" className="text-sm text-muted" role="alert">

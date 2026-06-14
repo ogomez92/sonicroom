@@ -44,6 +44,7 @@ export function AudioControls({
   onLeave,
 }: AudioControlsProps) {
   const isMuted = useRoomStore((s) => s.isMuted);
+  const hasMic = useRoomStore((s) => s.hasMic);
   const isSharingAudio = useRoomStore((s) => s.isSharingAudio);
   const isStreamingFile = useRoomStore((s) => s.fileStreamName != null);
   const duckingEnabled = useRoomStore((s) => s.duckingEnabled);
@@ -185,18 +186,26 @@ export function AudioControls({
         aria-label={m.controls_toolbar_label()}
         onKeyDown={onKeyDown}
       >
+        {/* Mute. With no microphone (listen/chat-only) there's nothing to mute:
+            stays focusable for discoverability but is aria-disabled, relabelled,
+            and shows a struck-through mic. */}
         <button
           {...item("mute")}
-          onClick={onToggleMute}
+          onClick={hasMic ? onToggleMute : undefined}
+          aria-disabled={!hasMic}
           className={`flex h-11 w-11 items-center justify-center rounded-full transition-all ${
-            isMuted
-              ? "bg-muted/20 text-muted hover:bg-muted/30"
-              : "bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
+            !hasMic
+              ? "cursor-not-allowed bg-sonic-700 text-sonic-500"
+              : isMuted
+                ? "bg-muted/20 text-muted hover:bg-muted/30"
+                : "bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
           }`}
-          aria-label={isMuted ? m.controls_unmute() : m.controls_mute()}
-          title={m.controls_mute_title()}
+          aria-label={
+            hasMic ? (isMuted ? m.controls_unmute() : m.controls_mute()) : m.controls_no_mic()
+          }
+          title={hasMic ? m.controls_mute_title() : m.controls_no_mic_title()}
         >
-          {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+          {!hasMic || isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
         </button>
 
         <button

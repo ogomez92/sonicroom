@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ChatMessage } from "../lib/chat";
 import { getLocale, setLocale as applyParaglideLocale, type Locale } from "../lib/i18n";
+import { speak } from "../lib/tts";
 
 // Keep the in-memory chat bounded; the server caps history too. Newest last.
 const CHAT_MESSAGES_MAX = 200;
@@ -78,6 +79,23 @@ function loadStreamConfig(): StreamConfig {
   return { ...DEFAULT_STREAM_CONFIG };
 }
 
+// How incoming/outgoing chat messages are spoken to the user. A persisted
+// accessibility preference:
+//  - "polite"    — announced on a polite ARIA live region (default; queues
+//                  behind other screen-reader speech).
+//  - "assertive" — announced on an assertive ARIA live region (interrupts).
+//  - "tts"       — read aloud by the browser's speech synthesis, for users who
+//                  do NOT run a screen reader (see lib/tts).
+//  - "off"       — not announced at all (still shown in the chat list).
+export type ChatAnnounceMode = "polite" | "assertive" | "tts" | "off";
+
+const CHAT_ANNOUNCE_KEY = "sonicroom:chatAnnounceMode";
+
+function loadChatAnnounceMode(): ChatAnnounceMode {
+  const v = loadString(CHAT_ANNOUNCE_KEY);
+  return v === "assertive" || v === "tts" || v === "off" ? v : "polite";
+}
+
 export interface PeerState {
   peerId: string;
   displayName: string;
@@ -115,6 +133,12 @@ interface RoomState {
   displayName: string | null;
   localPeerId: string | null;
   mode: RoomMode;
+
+  // Whether we joined with a working microphone. False when the user opted out
+  // ("Join without a microphone") or no mic was available / permission denied —
+  // they listen and use text chat only. Gates the mute control + mic-level
+  // slider and shows a "text only" indicator on their own card.
+  hasMic: boolean;
 
   // Local controls
   isMuted: boolean;
@@ -160,6 +184,18 @@ interface RoomState {
   announcement: string;
   announceSeq: number;
 
+  // Chat-message announcements are kept on their OWN channel, separate from the
+  // general announcement above, so they can follow the user's chatAnnounceMode
+  // (polite / assertive / spoken / off). `chatPoliteMsg` and `chatAssertiveMsg`
+  // feed two always-mounted live regions of the matching politeness — only the
+  // one for the active mode is filled. `chatAnnounceSeq` re-keys the region so
+  // an identical repeated message is still re-announced. (TTS mode speaks via
+  // the browser and leaves both region strings empty.)
+  chatAnnounceMode: ChatAnnounceMode;
+  chatPoliteMsg: string;
+  chatAssertiveMsg: string;
+  chatAnnounceSeq: number;
+
   // "Ask to join" (knock-to-join) for public rooms:
   // - joinRequests: people waiting at the door, shown to participants in a modal
   //   (with a looping knock cue) so they can allow/deny. Empty when nobody waits.
@@ -188,6 +224,7 @@ interface RoomState {
   setConnected: (connected: boolean) => void;
   setRoom: (roomName: string, displayName: string, localPeerId: string) => void;
   setMode: (mode: RoomMode) => void;
+  setHasMic: (hasMic: boolean) => void;
   setMuted: (muted: boolean) => void;
   setDeafened: (deafened: boolean) => void;
   setPttActive: (active: boolean) => void;
@@ -205,6 +242,9 @@ interface RoomState {
   setStreamError: (error: string | null) => void;
   announce: (message: string) => void;
   announceEvent: (message: string) => void;
+  setChatAnnounceMode: (mode: ChatAnnounceMode) => void;
+  // Announce a chat message via whichever channel chatAnnounceMode selects.
+  announceChat: (message: string) => void;
   setJoinRequests: (requests: JoinRequest[]) => void;
   setAwaitingApproval: (awaiting: boolean) => void;
   setRoomIsPublic: (isPublic: boolean) => void;
@@ -222,13 +262,14 @@ interface RoomState {
   reset: () => void;
 }
 
-export const useRoomStore = create<RoomState>((set) => ({
+export const useRoomStore = create<RoomState>((set, get) => ({
   locale: getLocale(),
   connected: false,
   roomName: null,
   displayName: null,
   localPeerId: null,
   mode: "p2p",
+  hasMic: true,
   isMuted: false,
   isDeafened: false,
   isPushToTalk: false,
@@ -247,6 +288,10 @@ export const useRoomStore = create<RoomState>((set) => ({
   streamError: null,
   announcement: "",
   announceSeq: 0,
+  chatAnnounceMode: loadChatAnnounceMode(),
+  chatPoliteMsg: "",
+  chatAssertiveMsg: "",
+  chatAnnounceSeq: 0,
   joinRequests: [],
   awaitingApproval: false,
   roomIsPublic: false,
@@ -264,6 +309,7 @@ export const useRoomStore = create<RoomState>((set) => ({
   setConnected: (connected) => set({ connected }),
   setRoom: (roomName, displayName, localPeerId) => set({ roomName, displayName, localPeerId }),
   setMode: (mode) => set({ mode }),
+  setHasMic: (hasMic) => set({ hasMic }),
   setMuted: (isMuted) => set({ isMuted }),
   setDeafened: (isDeafened) => set({ isDeafened }),
   setPttActive: (pttActive) => set({ pttActive }),
@@ -331,6 +377,37 @@ export const useRoomStore = create<RoomState>((set) => ({
         messages.splice(0, messages.length - CHAT_MESSAGES_MAX);
       return { announcement: message, announceSeq: s.announceSeq + 1, messages };
     }),
+
+  setChatAnnounceMode: (mode) => {
+    saveString(CHAT_ANNOUNCE_KEY, mode);
+    set({ chatAnnounceMode: mode });
+  },
+
+  // Route a chat-message announcement to the channel the user chose. Each call
+  // bumps chatAnnounceSeq so the live-region <span> re-keys (re-announcing an
+  // identical repeated line), and fills exactly one of the two region strings
+  // (clearing the other) — or, in TTS mode, speaks it and leaves both empty.
+  // "off" announces nothing (the message is still rendered + chimed elsewhere).
+  announceChat: (message) => {
+    const s = get();
+    const chatAnnounceSeq = s.chatAnnounceSeq + 1;
+    switch (s.chatAnnounceMode) {
+      case "off":
+        set({ chatAnnounceSeq });
+        return;
+      case "tts":
+        speak(message, s.locale);
+        set({ chatAnnounceSeq, chatPoliteMsg: "", chatAssertiveMsg: "" });
+        return;
+      case "assertive":
+        set({ chatAnnounceSeq, chatAssertiveMsg: message, chatPoliteMsg: "" });
+        return;
+      case "polite":
+      default:
+        set({ chatAnnounceSeq, chatPoliteMsg: message, chatAssertiveMsg: "" });
+        return;
+    }
+  },
 
   addMessage: (message) =>
     set((s) => {
@@ -418,6 +495,7 @@ export const useRoomStore = create<RoomState>((set) => ({
       displayName: null,
       localPeerId: null,
       mode: "p2p",
+      hasMic: true,
       isMuted: false,
       isDeafened: false,
       isPushToTalk: false,
@@ -433,6 +511,10 @@ export const useRoomStore = create<RoomState>((set) => ({
       streamError: null,
       announcement: "",
       announceSeq: 0,
+      // Keep chatAnnounceMode (a persisted preference); only the live strings reset.
+      chatPoliteMsg: "",
+      chatAssertiveMsg: "",
+      chatAnnounceSeq: 0,
       joinRequests: [],
       awaitingApproval: false,
       roomIsPublic: false,

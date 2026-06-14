@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, X } from "lucide-react";
-import { useRoomStore } from "../stores/room";
+import { useRoomStore, type ChatAnnounceMode } from "../stores/room";
 import { relativeTime, messageContent, META_SEP } from "../lib/chat";
+import { warmUpTts } from "../lib/tts";
 import { m } from "../paraglide/messages.js";
 
 interface ChatProps {
@@ -21,6 +22,8 @@ interface ChatProps {
 export function Chat({ onSend, onClose, focusSignal }: ChatProps) {
   const messages = useRoomStore((s) => s.messages);
   const announce = useRoomStore((s) => s.announce);
+  const chatAnnounceMode = useRoomStore((s) => s.chatAnnounceMode);
+  const setChatAnnounceMode = useRoomStore((s) => s.setChatAnnounceMode);
   const [text, setText] = useState("");
   // Active listbox option (roving via aria-activedescendant). -1 = none yet.
   const [activeIdx, setActiveIdx] = useState(-1);
@@ -123,15 +126,41 @@ export function Chat({ onSend, onClose, focusSignal }: ChatProps) {
         }
       }}
     >
-      <header className="flex items-center justify-between border-b border-sonic-700 px-4 py-2.5">
+      <header className="flex items-center justify-between gap-2 border-b border-sonic-700 px-4 py-2.5">
         <h2 className="text-sm font-semibold text-sonic-100">{m.chat_heading()}</h2>
-        <button
-          onClick={onClose}
-          className="flex h-7 w-7 items-center justify-center rounded-full text-sonic-300 hover:bg-sonic-700 hover:text-sonic-100"
-          aria-label={m.chat_close()}
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {/* How new messages are announced: a polite or assertive ARIA live
+              region, the browser's spoken voice (for users without a screen
+              reader), or off. Persisted. Choosing "spoken" warms up speech
+              synthesis from within this gesture so the first message isn't
+              dropped. */}
+          <label htmlFor="chat-announce-mode" className="sr-only">
+            {m.chat_announce_label()}
+          </label>
+          <select
+            id="chat-announce-mode"
+            value={chatAnnounceMode}
+            onChange={(e) => {
+              const mode = e.target.value as ChatAnnounceMode;
+              if (mode === "tts") warmUpTts();
+              setChatAnnounceMode(mode);
+            }}
+            title={m.chat_announce_label()}
+            className="rounded-md border border-sonic-600 bg-sonic-900 px-1.5 py-1 text-xs text-sonic-200 focus:border-sonic-accent focus:outline-none"
+          >
+            <option value="polite">{m.chat_announce_polite()}</option>
+            <option value="assertive">{m.chat_announce_assertive()}</option>
+            <option value="tts">{m.chat_announce_tts()}</option>
+            <option value="off">{m.chat_announce_off()}</option>
+          </select>
+          <button
+            onClick={onClose}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sonic-300 hover:bg-sonic-700 hover:text-sonic-100"
+            aria-label={m.chat_close()}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </header>
 
       {/* Message list FIRST (before the composer). A focusable listbox you can

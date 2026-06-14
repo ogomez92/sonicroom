@@ -43,6 +43,7 @@ import {
   announce_kick_vote_withdrawn,
   announce_peer_kicked,
   announce_you_were_kicked,
+  announce_no_mic,
   file_stream_name,
   file_player_streaming,
   share_stream_name,
@@ -209,6 +210,12 @@ export function useMediasoup() {
   const producerRef = useRef<Producer | null>(null);
   const peerAudiosRef = useRef<Map<string, PeerAudio>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
+  // True when we joined WITHOUT a microphone (opted out, or none available /
+  // permission denied) — we listen and use text chat only. The outgoing track is
+  // always outDest's (silent with no mic connected), so producing/adding it
+  // still works; we just never acquire a mic and stay muted. Persists across
+  // reconnects so a rejoin doesn't re-prompt.
+  const noMicRef = useRef(false);
   // True while the server reports someone is talking (drives music ducking).
   const isVoiceActiveRef = useRef(false);
   // P2P
@@ -512,6 +519,10 @@ export function useMediasoup() {
 
   // --- P2P: create a peer connection ---
   const ensureLocalStream = useCallback(async () => {
+    // Mic-less session: never acquire (or re-acquire) a microphone. Callers
+    // build/produce from outDest's silent track instead, guarding the null.
+    if (noMicRef.current) return null;
+
     const existing = localStreamRef.current;
     const track = existing?.getAudioTracks()[0];
     if (track && track.readyState === "live") return existing!;
@@ -542,7 +553,7 @@ export function useMediasoup() {
       }
 
       const localStream = await ensureLocalStream();
-      connectMicToGraph(localStream);
+      if (localStream) connectMicToGraph(localStream);
 
       const pc = new RTCPeerConnection({
         iceServers: ICE_SERVERS,
@@ -825,9 +836,10 @@ export function useMediasoup() {
     async (rtpCapabilities: Record<string, unknown>) => {
       // Re-acquires the mic if its track died (e.g. iOS killed it during the
       // outage that preceded a reconnect) — producing from a dead source
-      // would silently send silence for the rest of the session.
+      // would silently send silence for the rest of the session. Null in a
+      // mic-less session; the produce below still uses outDest's silent track.
       const localStream = await ensureLocalStream();
-      connectMicToGraph(localStream);
+      if (localStream) connectMicToGraph(localStream);
 
       // Load device if needed
       let device = deviceRef.current;
@@ -967,17 +979,43 @@ export function useMediasoup() {
     async (
       roomName: string,
       displayName: string,
-      opts?: { disableP2p?: boolean; isPublic?: boolean },
+      opts?: { disableP2p?: boolean; isPublic?: boolean; noMic?: boolean },
     ) => {
       // Acquire stereo audio + build the outgoing graph BEFORE connecting so
       // it's ready the moment we (re)join. The mic, AudioContext and outgoing
       // track are reused for the whole session and survive reconnects, so a
       // network blip never re-prompts for the mic or rebuilds the send chain.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: micConstraints(2, store.getState().micDeviceId),
-      });
-      localStreamRef.current = stream;
-      connectMicToGraph(stream);
+      //
+      // A microphone must NEVER block joining: if the user opted out ("Join
+      // without a microphone") we don't even prompt, and if acquisition fails
+      // (no device, or permission denied) we fall back to the same mic-less
+      // mode instead of throwing. Either way they can still listen and chat —
+      // the outgoing track is outDest's, which is valid (silent) without a mic.
+      let stream: MediaStream | null = null;
+      if (!opts?.noMic) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: micConstraints(2, store.getState().micDeviceId),
+          });
+        } catch (err) {
+          console.warn("[mic] no microphone — joining in listen/chat-only mode:", err);
+        }
+      }
+      if (stream) {
+        noMicRef.current = false;
+        localStreamRef.current = stream;
+        connectMicToGraph(stream);
+        store.getState().setHasMic(true);
+      } else {
+        // Mic-less: build the (silent) outgoing graph so producing/adding the
+        // outDest track still works, and reflect the state in the store (gates
+        // the mute control + mic slider, shows a "text only" indicator).
+        noMicRef.current = true;
+        localStreamRef.current = null;
+        ensureOutGraph();
+        store.getState().setHasMic(false);
+        store.getState().setMuted(true);
+      }
 
       const socket = io({ transports: ["websocket"] });
       socketRef.current = socket;
@@ -1119,6 +1157,16 @@ export function useMediasoup() {
               await consumeProducer(peer.peerId, prod.producerId, prod.source);
             }
           }
+        }
+
+        // Mic-less session: we still produced/added outDest's silent track, so
+        // present as muted — pause the (SFU) voice producer and tell the server,
+        // which marks us muted and broadcasts peer-muted so everyone sees it.
+        // Re-runs on every reconnect, keeping us muted after a rejoin.
+        if (noMicRef.current) {
+          store.getState().setMuted(true);
+          if (modeRef.current === "sfu") producerRef.current?.pause();
+          await emit("producer-pause", {}).catch(() => {});
         }
       };
 
@@ -1603,7 +1651,10 @@ export function useMediasoup() {
       });
 
       // Incoming chat (including the echo of our own messages): render it, chime
-      // a distinct cue, and announce it on the polite ARIA region.
+      // a distinct cue, and announce it via the user's chosen channel — a polite
+      // or assertive ARIA live region, or the browser's spoken TTS (announceChat
+      // reads chatAnnounceMode). Both sent and received messages flow through
+      // here (own messages come back as an echo), so both get announced.
       socket.on("chat-message", (msg: ChatMessage) => {
         store.getState().addMessage(msg);
         let announcement = formatMessage(msg, Date.now());
@@ -1613,13 +1664,18 @@ export function useMediasoup() {
           chatHintGivenRef.current = true;
           announcement += `${META_SEP}${announce_chat_hint()}`;
         }
-        store.getState().announce(announcement);
+        store.getState().announceChat(announcement);
         playCue(sharedAudioContext, "message");
       });
 
       // Resolve once the first connect → join → media setup has completed (or
       // reject if that initial join fails), so callers can flip to "joined".
       await ready;
+
+      // Once joined, let the user know (and log to chat) that they're in
+      // listen/chat-only mode, so it's not a silent surprise that they can't
+      // talk. Runs once — `ready` resolves only on the first successful join.
+      if (noMicRef.current) store.getState().announceEvent(announce_no_mic());
     },
     [
       emit,
@@ -1627,6 +1683,7 @@ export function useMediasoup() {
       setupSfu,
       createP2pConnection,
       connectMicToGraph,
+      ensureOutGraph,
       teardownP2p,
       teardownSfu,
       applyDuck,

@@ -36,6 +36,16 @@ function isPublicEnabled(value: string | null): boolean {
   return ["true", "1", "yes", "on", "enable", "enabled", "public"].includes(v);
 }
 
+// `?mic=off` (also accepts false/0/no/disable/disabled) joins WITHOUT a
+// microphone — listen + text chat only, no mic prompt. Flows from the lobby's
+// "Join without a microphone" toggle. (A missing/denied mic falls back to the
+// same mode automatically, even without this.)
+function isMicDisabled(value: string | null): boolean {
+  if (value == null) return false;
+  const v = value.toLowerCase();
+  return ["off", "false", "0", "no", "disable", "disabled"].includes(v);
+}
+
 // When embedded in an iframe (e.g. jitchat), mirror room lifecycle events to the
 // host page via postMessage so it can play sounds / reset its view. The event
 // names match the Jitsi External API events the host previously relied on. No-op
@@ -57,6 +67,7 @@ export function Room() {
     isP2pDisabled(searchParams.get("p2p")) ||
     (p2pStorageKey != null && sessionStorage.getItem(p2pStorageKey) === "1");
   const makePublic = isPublicEnabled(searchParams.get("public"));
+  const noMic = isMicDisabled(searchParams.get("mic"));
   const navigate = useNavigate();
   const {
     join,
@@ -133,6 +144,7 @@ export function Room() {
   const displayName = useRoomStore((s) => s.displayName);
   const peers = useRoomStore((s) => s.peers);
   const isMuted = useRoomStore((s) => s.isMuted);
+  const hasMic = useRoomStore((s) => s.hasMic);
   const micGain = useRoomStore((s) => s.micGain);
   const mode = useRoomStore((s) => s.mode);
   const isRecording = useRoomStore((s) => s.isRecording);
@@ -142,6 +154,12 @@ export function Room() {
   const messages = useRoomStore((s) => s.messages);
   const announcement = useRoomStore((s) => s.announcement);
   const announceSeq = useRoomStore((s) => s.announceSeq);
+  // Chat-message announcements ride their own polite/assertive regions, driven
+  // by the user's chatAnnounceMode (the other mode, TTS, speaks via the browser
+  // and leaves both strings empty).
+  const chatPoliteMsg = useRoomStore((s) => s.chatPoliteMsg);
+  const chatAssertiveMsg = useRoomStore((s) => s.chatAssertiveMsg);
+  const chatAnnounceSeq = useRoomStore((s) => s.chatAnnounceSeq);
   // True while we're knocking on a public room and waiting to be let in.
   const awaitingApproval = useRoomStore((s) => s.awaitingApproval);
   // Whether the room is public (shows the vote-to-kick controls) and whether we
@@ -188,7 +206,7 @@ export function Room() {
     // re-asserts it even without the URL param.
     if (disableP2p && p2pStorageKey) sessionStorage.setItem(p2pStorageKey, "1");
 
-    join(roomName, name, { disableP2p, isPublic: makePublic })
+    join(roomName, name, { disableP2p, isPublic: makePublic, noMic })
       .then(() => setJoinState("joined"))
       .catch((err) => {
         setJoinState("error");
@@ -202,7 +220,7 @@ export function Room() {
             : msg || m.room_failed_to_join(),
         );
       });
-  }, [roomName, join, navigate, disableP2p, makePublic, p2pStorageKey, searchParams]);
+  }, [roomName, join, navigate, disableP2p, makePublic, noMic, p2pStorageKey, searchParams]);
 
   // Mirror room lifecycle to the host page when embedded (see postToHost).
   useEffect(() => {
@@ -475,8 +493,10 @@ export function Room() {
                   iVotedKick: false,
                 }}
                 isLocal
+                // No mic → no mic-level slider, and a "text only" indicator.
+                textOnly={!hasMic}
                 micGain={micGain}
-                onMicGainChange={setMicGain}
+                onMicGainChange={hasMic ? setMicGain : undefined}
               />
             )}
 
@@ -521,6 +541,18 @@ export function Room() {
           key changes per announcement so identical messages re-announce. */}
       <div aria-live="polite" role="status" className="sr-only" id="sr-announcements">
         <span key={announceSeq}>{announcement}</span>
+      </div>
+
+      {/* Chat-message announcements on their OWN regions so they can follow the
+          user's preference (Chat panel → "Announce new messages"). Both are
+          always mounted; announceChat fills only the one for the active mode
+          (polite or assertive), or neither in spoken-TTS / off modes. The key
+          re-mounts the span so a repeated identical message re-announces. */}
+      <div aria-live="polite" role="status" className="sr-only" id="sr-chat-polite">
+        <span key={`cp-${chatAnnounceSeq}`}>{chatPoliteMsg}</span>
+      </div>
+      <div aria-live="assertive" role="alert" className="sr-only" id="sr-chat-assertive">
+        <span key={`ca-${chatAnnounceSeq}`}>{chatAssertiveMsg}</span>
       </div>
 
       {/* Knock-to-join: allow/deny people asking to enter this public room.

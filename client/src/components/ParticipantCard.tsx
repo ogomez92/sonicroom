@@ -7,6 +7,9 @@ interface ParticipantCardProps {
   peer: PeerState;
   isLocal: boolean;
   onVolumeChange?: (volume: number) => void;
+  // Local card only: you joined without a microphone (listen + text chat only).
+  // Shows a "Text only" indicator and hides the mic-level slider.
+  textOnly?: boolean;
   // Local card only: your outgoing mic gain (send-side), and its setter.
   micGain?: number;
   onMicGainChange?: (gain: number) => void;
@@ -30,6 +33,7 @@ export function ParticipantCard({
   peer,
   isLocal,
   onVolumeChange,
+  textOnly,
   micGain,
   onMicGainChange,
   canKick,
@@ -61,7 +65,9 @@ export function ParticipantCard({
       // at least one kick vote against them); only meaningful where a kick is
       // possible, so it's left off non-votable cards.
       aria-selected={canKick ? peer.kickVotes > 0 : undefined}
-      aria-label={`${peer.displayName}${isLocal ? ` (${m.card_you()})` : ""}${peer.isMuted ? `, ${m.card_muted_fragment()}` : ""}${peer.isSpeaking ? `, ${m.card_speaking_fragment()}` : ""}`}
+      aria-label={`${peer.displayName}${isLocal ? ` (${m.card_you()})` : ""}${
+        textOnly ? `, ${m.card_text_only()}` : peer.isMuted ? `, ${m.card_muted_fragment()}` : ""
+      }${peer.isSpeaking ? `, ${m.card_speaking_fragment()}` : ""}`}
     >
       {/* Avatar */}
       <div
@@ -88,8 +94,15 @@ export function ParticipantCard({
             {m.card_you()}
           </span>
         )}
+        {isLocal && textOnly && (
+          <span className="rounded bg-sonic-700 px-1.5 py-0.5 text-xs text-sonic-300">
+            {m.card_text_only()}
+          </span>
+        )}
         {peer.isMusic ? (
           <Music className="h-3.5 w-3.5 text-sonic-accent" aria-label={m.card_music_stream()} />
+        ) : textOnly ? (
+          <MicOff className="h-3.5 w-3.5 text-sonic-400" aria-label={m.card_text_only_status()} />
         ) : peer.isMuted ? (
           <MicOff className="h-3.5 w-3.5 text-muted" aria-label={m.card_muted_status()} />
         ) : (
