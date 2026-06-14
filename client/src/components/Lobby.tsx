@@ -5,6 +5,7 @@ import { MicPreview } from "./MicPreview";
 import { LanguageSelect } from "./LanguageSelect";
 import { Footer } from "./Footer";
 import { getLocale } from "../lib/i18n";
+import { getInstanceName } from "../lib/branding";
 import { m } from "../paraglide/messages.js";
 
 function sanitize(input: string): string {
@@ -72,6 +73,13 @@ export function Lobby() {
       roomInputRef.current?.focus();
     }
   }, [prefillRoom]);
+
+  // Reflect this instance's name in the tab title on the lobby (the Room sets
+  // its own "<room> · <instance>" title). Keeps it in sync after the Room's
+  // cleanup and on SPA navigation back here.
+  useEffect(() => {
+    document.title = getInstanceName();
+  }, []);
 
   // Fetch the public room directory on mount and poll it. Failures are ignored
   // (the list just stays empty/stale); the cleanup flag avoids a late setState.
@@ -218,7 +226,9 @@ export function Lobby() {
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-sonic-accent/20">
               <Headphones className="h-6 w-6 text-sonic-accent" />
             </div>
-            <h1 className="text-3xl font-bold tracking-tight text-sonic-100">SonicRoom</h1>
+            <h1 className="text-3xl font-bold tracking-tight text-sonic-100">
+              {getInstanceName()}
+            </h1>
           </div>
 
           <p className="mb-6 text-center text-sm text-sonic-300">{m.lobby_tagline()}</p>

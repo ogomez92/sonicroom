@@ -4,6 +4,7 @@ import { Headphones, Users, Loader2, Circle, MessageSquare, Radio } from "lucide
 import { useRoomStore } from "../stores/room";
 import { useMediasoup } from "../hooks/useMediasoup";
 import { formatMessage, messageContent } from "../lib/chat";
+import { getInstanceName } from "../lib/branding";
 import { ParticipantCard } from "./ParticipantCard";
 import { AudioControls } from "./AudioControls";
 import { FileStreamPlayer } from "./FileStreamPlayer";
@@ -171,9 +172,10 @@ export function Room() {
   // room, restoring the default when we leave.
   useEffect(() => {
     if (!roomName) return;
-    document.title = `${roomName} · SonicRoom`;
+    const instance = getInstanceName();
+    document.title = `${roomName} · ${instance}`;
     return () => {
-      document.title = "SonicRoom";
+      document.title = instance;
     };
   }, [roomName]);
 

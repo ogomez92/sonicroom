@@ -150,6 +150,16 @@ Run these on your server, one line at a time.
 
   Check it with `sudo ufw status`. The recording/streaming ports (50000–50998, 51000–51998) stay on loopback inside the server and don't need opening.
 
+### Rename your instance
+
+Want it to show your own name instead of "SonicRoom" in the lobby and the browser tab? Create a `.env` file in the project folder (copy the example with `cp .env.example .env`) and set:
+
+```bash
+INSTANCE_NAME=Acme Voice Rooms
+```
+
+Then restart the server (`pnpm start`, or `systemctl restart sonicroom` if you set up the service). **No rebuild needed** — the name is applied when the page loads. (The small "Powered by SonicRoom" credit in the footer stays, like a "Made with" badge.)
+
 ### Keeping it running
 
 `pnpm start` stops when you close your SSH session. To keep SonicRoom running in the background and restart it automatically, run it as a service — see [Deployment & runtime](#deployment--runtime) for a ready-made `systemd` setup. Optional settings (like notifications) live in a `.env` file — see [Environment variables](#environment-variables).
@@ -364,13 +374,14 @@ Only the WebRTC media range and the signaling port need to be reachable; the rec
 
 The server loads a gitignored `.env` from the repo root at startup (see `.env.example`). All of these are operator-only and never surfaced in the UI; an absent `.env` simply leaves the optional features off.
 
-| Variable                                  | Purpose                                                                                      |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `PORT`                                    | HTTP/signaling port (default `3100`).                                                        |
-| `ANNOUNCED_IP` / `ANNOUNCED_IP6`          | The VPS public IPv4/IPv6 announced to ICE — **required in production** for media to connect. |
-| `NODE_ENV`                                | Set to `production` for production runs.                                                     |
-| `NOTY_ENABLED`                            | `true` to enable off-box notifications for public-room activity.                             |
-| `NOTY_HOST` / `NOTY_PORT` / `NOTY_SENDER` | Target and identity for the optional "noty" notification daemon.                             |
+| Variable                                  | Purpose                                                                                                                                                         |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INSTANCE_NAME`                           | Display name of your instance (lobby heading + browser tab). Defaults to `SonicRoom`; change it to rebrand — see [Rename your instance](#rename-your-instance). |
+| `PORT`                                    | HTTP/signaling port (default `3100`).                                                                                                                           |
+| `ANNOUNCED_IP` / `ANNOUNCED_IP6`          | The VPS public IPv4/IPv6 announced to ICE — **required in production** for media to connect.                                                                    |
+| `NODE_ENV`                                | Set to `production` for production runs.                                                                                                                        |
+| `NOTY_ENABLED`                            | `true` to enable off-box notifications for public-room activity.                                                                                                |
+| `NOTY_HOST` / `NOTY_PORT` / `NOTY_SENDER` | Target and identity for the optional "noty" notification daemon.                                                                                                |
 
 To get started locally: `cp .env.example .env` and edit as needed (the defaults are a no-op).
 

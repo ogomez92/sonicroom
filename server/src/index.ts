@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer } from "node:http";
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { createWorker } from "mediasoup";
@@ -26,6 +26,12 @@ try {
 }
 
 const PORT = parseInt(process.env.PORT || "3100", 10);
+
+// Display name of this instance, shown as the app title (lobby heading + browser
+// tab). Operators rebrand a deployment by setting INSTANCE_NAME in .env; it's
+// injected into the served index.html at runtime (see below), so a pre-built
+// client is rebranded without a rebuild. Defaults to "SonicRoom".
+const INSTANCE_NAME = process.env.INSTANCE_NAME?.trim() || "SonicRoom";
 
 async function main() {
   // Create mediasoup workers
@@ -137,11 +143,49 @@ async function main() {
     zip.pipe(res);
   });
 
-  // Serve built client in production
+  // Serve built client in production. Hashed assets (JS/CSS) are served
+  // statically, but NOT index.html (`index: false`) — every page / SPA-route
+  // request falls through to the handler below, which injects this instance's
+  // runtime config into the HTML.
   const clientDist = path.resolve(__dirname, "../../client/dist");
-  app.use(express.static(clientDist));
+  const indexHtmlPath = path.join(clientDist, "index.html");
+  app.use(express.static(clientDist, { index: false }));
+
+  // Inject the operator-configurable instance name into the served index.html so
+  // the pre-built static client can be rebranded via INSTANCE_NAME in .env with
+  // no rebuild: an inline config script the client reads before it mounts (see
+  // client/src/lib/branding.ts), plus the static <title>. Read fresh per request
+  // (not cached) so a client-only `pnpm build` — which changes the asset hashes
+  // referenced in index.html — is picked up on the next load without a restart.
+  const renderIndexHtml = (): string | null => {
+    let html: string;
+    try {
+      html = readFileSync(indexHtmlPath, "utf8");
+    } catch {
+      return null; // client not built yet
+    }
+    // JS object literal; escape "<" so a name containing "</script>" can't break
+    // out of the inline <script>. Injected right after <head> so it runs before
+    // the (deferred) app bundle.
+    const configJson = JSON.stringify({ instanceName: INSTANCE_NAME }).replace(/</g, "\\u003c");
+    html = html.replace(
+      "<head>",
+      `<head><script>window.__SONICROOM_CONFIG__=${configJson};</script>`,
+    );
+    const safeTitle = INSTANCE_NAME.replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    html = html.replace(/<title>[^<]*<\/title>/, `<title>${safeTitle}</title>`);
+    return html;
+  };
+
   app.get("/{*splat}", (_req, res) => {
-    res.sendFile(path.join(clientDist, "index.html"));
+    const html = renderIndexHtml();
+    if (html == null) {
+      res.status(404).type("text/plain").send("Client not built. Run `pnpm build`.");
+      return;
+    }
+    res.type("html").send(html);
   });
 
   httpServer.listen(PORT, () => {
