@@ -141,7 +141,14 @@ Run these on your server, one line at a time.
 ### Two things that trip people up
 
 - **Microphones need a secure (HTTPS) page.** Browsers only allow microphone access on `https://…` pages (or on `localhost`). For a real public server you'll want a domain name and HTTPS. The easy route is to put a **reverse proxy** in front of SonicRoom — [Caddy](https://caddyserver.com) gets you automatic HTTPS in about three lines of config and forwards traffic to port 3100. (Until then, people **can still join with the "Join without a microphone" option and use text chat.**)
-- **Open the audio ports in your firewall.** Voice/music travels over **UDP ports 40000–40100** — allow those, plus the web port (3100, or 80/443 if you use a reverse proxy). The recording/streaming ports stay inside the server and don't need opening.
+- **Open the audio ports in your firewall.** Voice/music travels over **UDP ports 40000–40100**. With [`ufw`](https://help.ubuntu.com/community/UFW) (the common Debian/Ubuntu firewall) you can open the whole range in one line — note the **colon** for the range and the `/udp` (both are required):
+
+  ```bash
+  sudo ufw allow 40000:40100/udp     # the audio range, in a single rule
+  sudo ufw allow 3100/tcp            # the web port (or: sudo ufw allow 80,443/tcp behind a reverse proxy)
+  ```
+
+  Check it with `sudo ufw status`. The recording/streaming ports (50000–50998, 51000–51998) stay on loopback inside the server and don't need opening.
 
 ### Keeping it running
 
