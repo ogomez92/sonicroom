@@ -102,6 +102,9 @@ interface Harness {
   clock: { t: number };
   timers: Array<{ fn: () => void; ms: number }>;
   missingFiles: Set<string>;
+  // capture files that exist but hold only an Opus header (a silent/muted
+  // producer that received no RTP): a tiny ~158-byte file, below MIN_CAPTURE_BYTES.
+  headerOnlyFiles: Set<string>;
 }
 
 function makeHarness(): Harness {
@@ -114,6 +117,7 @@ function makeHarness(): Harness {
   const clock = { t: 1000 };
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const missingFiles = new Set<string>();
+  const headerOnlyFiles = new Set<string>();
 
   const deps: Partial<RecordingDeps> = {
     spawn: (command, args) => {
@@ -131,8 +135,10 @@ function makeHarness(): Harness {
     rm: async (dir) => {
       rmCalls.push(dir);
     },
-    // pretend capture files exist (have data) unless explicitly marked missing
-    fileSize: (file) => (missingFiles.has(file) ? 0 : 1),
+    // pretend capture files exist with real audio (well above MIN_CAPTURE_BYTES)
+    // unless explicitly marked missing (0 bytes) or header-only (a silent
+    // producer's ~158-byte Ogg, which must be skipped so it can't break the mix)
+    fileSize: (file) => (missingFiles.has(file) ? 0 : headerOnlyFiles.has(file) ? 158 : 100_000),
     sleep: async () => {},
     setTimer: (fn, ms) => {
       const entry = { fn, ms };
@@ -163,6 +169,7 @@ function makeHarness(): Harness {
     clock,
     timers,
     missingFiles,
+    headerOnlyFiles,
   };
 }
 
@@ -329,6 +336,15 @@ describe("RecordingManager.getTrackFiles / tracksByRecordingId", () => {
     assert.ok(tracks[0].path.includes("alice__p1"));
   });
 
+  it("skips header-only captures (a muted producer that received no RTP)", async () => {
+    const rec = await h.manager.start("room1", h.router, PRODUCERS);
+    // bob stayed muted: his capture file is just an Opus header, no audio
+    h.headerOnlyFiles.add(`${rec.dir}/bob__p2.ogg`);
+    const tracks = h.manager.getTrackFiles("room1");
+    assert.equal(tracks.length, 1);
+    assert.ok(tracks[0].path.includes("alice__p1"));
+  });
+
   it("resolves an active or finished recording by its id", async () => {
     const rec = await h.manager.start("room1", h.router, PRODUCERS);
     assert.equal(h.manager.tracksByRecordingId(rec.id)?.length, 2);
@@ -376,6 +392,28 @@ describe("RecordingManager.mix", () => {
     const inputArgs = proc.args.filter((_, i) => proc.args[i - 1] === "-i");
     assert.ok(inputArgs.some((p) => p.includes("alice__p1")));
     assert.ok(!inputArgs.some((p) => p.includes("bob__p2")));
+  });
+
+  it("skips header-only captures so a muted producer can't break the whole mix", async () => {
+    // Regression: a silent/muted producer leaves a tiny header-only Ogg. ffmpeg
+    // can't open it and aborts the entire mix (exit 187), so the download came
+    // back empty whenever anyone in the room was muted.
+    const rec = await h.manager.start("room1", h.router, PRODUCERS);
+    h.headerOnlyFiles.add(`${rec.dir}/bob__p2.ogg`);
+    const before = h.spawned.length;
+    const proc = h.manager.mix("room1") as FakeProcess;
+    assert.ok(proc, "should still mix alice's real audio");
+    assert.equal(h.spawned.length, before + 1);
+    const inputArgs = proc.args.filter((_, i) => proc.args[i - 1] === "-i");
+    assert.ok(inputArgs.some((p) => p.includes("alice__p1")));
+    assert.ok(!inputArgs.some((p) => p.includes("bob__p2")), "header-only file is excluded");
+  });
+
+  it("returns null when every capture is header-only (all producers silent)", async () => {
+    const rec = await h.manager.start("room1", h.router, PRODUCERS);
+    h.headerOnlyFiles.add(`${rec.dir}/alice__p1.ogg`);
+    h.headerOnlyFiles.add(`${rec.dir}/bob__p2.ogg`);
+    assert.equal(h.manager.mix("room1"), null);
   });
 
   it("can mix a finished recording after stop, by recording id", async () => {

@@ -16,6 +16,18 @@ import {
   type MixInput,
 } from "./recording-util.js";
 
+// A capture that received no RTP — a muted/silent producer, or one whose peer
+// never actually sent — still leaves a tiny header-only Ogg/Opus file on disk
+// (~158 bytes: the OpusHead + OpusTags pages, no audio). ffmpeg cannot open
+// such a file ("End of file") and, fatally, that aborts the WHOLE mix (exit
+// 187) so the download comes back empty — the room records "no audio" whenever
+// anyone happened to be muted. We therefore require a capture to be safely
+// larger than a bare header before it's fed to the mix or the per-track zip.
+// 1 KiB is far above any header yet far below any real capture (even a fraction
+// of a second of Opus is several KB), so this only ever drops audio-less
+// tracks, never real audio.
+export const MIN_CAPTURE_BYTES = 1024;
+
 // --- Minimal structural interfaces -----------------------------------------
 // We depend only on the slices of mediasoup / child_process / fs that we use,
 // so the manager can be driven by fakes in tests. The real mediasoup Router,
@@ -287,14 +299,15 @@ export class RecordingManager {
   }
 
   // Per-track files (live + already-left producers) with friendly, unique names
-  // for the "download every track on its own" zip. Empty/missing captures (a
-  // recorder that failed to start) are skipped so the zip has no dead entries.
+  // for the "download every track on its own" zip. Header-only/missing captures
+  // (a silent producer, or a recorder that failed to start) are skipped so the
+  // zip has no dead entries — see MIN_CAPTURE_BYTES.
   getTrackFiles(roomName: string): TrackFile[] {
     const rec = this.recordings.get(roomName);
     if (!rec) return [];
     return this.allRecorders(rec)
       .map((r, i) => ({ path: r.filePath, name: trackFileName(r, i) }))
-      .filter((t) => this.deps.fileSize(t.path) > 0);
+      .filter((t) => this.deps.fileSize(t.path) >= MIN_CAPTURE_BYTES);
   }
 
   // Same as getTrackFiles(), addressed by the (hard-to-guess) recording id that
@@ -308,11 +321,15 @@ export class RecordingManager {
 
   // Spawn a one-shot ffmpeg that mixes the current capture files into a single
   // Ogg/Opus stream on stdout. Capture processes (if still running) are never
-  // interrupted. Files that don't exist yet or are empty (e.g. a recorder that
-  // failed to start) are skipped, so one bad stream can't zero out the mix.
+  // interrupted. Files that don't exist yet, are empty, or hold only an Opus
+  // header with no audio (a muted/silent producer — see MIN_CAPTURE_BYTES) are
+  // skipped: ffmpeg can't open a header-only file and would abort the entire
+  // mix, so one silent stream must not be able to zero out the whole download.
   // Returns null if there's nothing with audio to mix.
   mix(roomName: string): SpawnedProcess | null {
-    const inputs = this.getMixInputs(roomName).filter((i) => this.deps.fileSize(i.path) > 0);
+    const inputs = this.getMixInputs(roomName).filter(
+      (i) => this.deps.fileSize(i.path) >= MIN_CAPTURE_BYTES,
+    );
     if (inputs.length === 0) return null;
     const args = buildMixArgs(inputs);
     this.deps.log(`mixing ${inputs.length} stream(s) for room "${roomName}"`);
