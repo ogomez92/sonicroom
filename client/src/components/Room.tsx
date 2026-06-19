@@ -164,11 +164,17 @@ export function Room() {
   // Bare (transient) announcer for local mute toggles — not logged to chat.
   const announce = useRoomStore((s) => s.announce);
   // Chat-message announcements ride their own polite/assertive regions, driven
-  // by the user's chatAnnounceMode (the other mode, TTS, speaks via the browser
+  // by the user's announceMode (the spoken mode, TTS, speaks via the browser
   // and leaves both strings empty).
   const chatPoliteMsg = useRoomStore((s) => s.chatPoliteMsg);
   const chatAssertiveMsg = useRoomStore((s) => s.chatAssertiveMsg);
   const chatAnnounceSeq = useRoomStore((s) => s.chatAnnounceSeq);
+  // Room-event announcements (join/leave/recording/share/…) ride their own
+  // polite/assertive regions too, driven by the same announceMode (TTS speaks
+  // via the browser and leaves both strings empty).
+  const roomPoliteMsg = useRoomStore((s) => s.roomPoliteMsg);
+  const roomAssertiveMsg = useRoomStore((s) => s.roomAssertiveMsg);
+  const roomAnnounceSeq = useRoomStore((s) => s.roomAnnounceSeq);
   // True while we're knocking on a public room and waiting to be let in.
   const awaitingApproval = useRoomStore((s) => s.awaitingApproval);
   // Whether the room is public (shows the vote-to-kick controls) and whether we
@@ -535,17 +541,34 @@ export function Room() {
         <PoweredBy />
       </footer>
 
-      {/* Screen reader announcements (peer join/leave, recording, etc.).
-          key changes per announcement so identical messages re-announce. */}
+      {/* Always-polite local feedback that must speak regardless of the
+          announce-mode settings: the Alt+number readback, "Copied", and the
+          file-player's own play/pause. key changes per message so identical
+          ones re-announce. */}
       <div aria-live="polite" role="status" className="sr-only" id="sr-announcements">
         <span key={announceSeq}>{announcement}</span>
       </div>
 
-      {/* Chat-message announcements on their OWN regions so they can follow the
-          user's preference (Chat panel → "Announce new messages"). Both are
-          always mounted; announceChat fills only the one for the active mode
-          (polite or assertive), or neither in spoken-TTS / off modes. The key
-          re-mounts the span so a repeated identical message re-announces. */}
+      {/* Room-event announcements (peer join/leave, mute, recording, share,
+          music, …) on their OWN regions so they can follow the user's
+          preference (Audio settings → "Announcements"). Both are always
+          mounted; announceEvent/announceTransient fill only the one for the
+          active mode (polite or assertive), or neither in spoken-TTS / off
+          modes. The key re-mounts the span so a repeated identical message
+          re-announces. */}
+      <div aria-live="polite" role="status" className="sr-only" id="sr-room-polite">
+        <span key={`rp-${roomAnnounceSeq}`}>{roomPoliteMsg}</span>
+      </div>
+      <div aria-live="assertive" role="alert" className="sr-only" id="sr-room-assertive">
+        <span key={`ra-${roomAnnounceSeq}`}>{roomAssertiveMsg}</span>
+      </div>
+
+      {/* Chat-message announcements on their OWN regions (kept separate from the
+          room-event regions so the two don't clobber each other), following the
+          same preference (Audio settings → "Announcements"). Both are always
+          mounted; announceChat fills only the one for the active mode (polite or
+          assertive), or neither in spoken-TTS / off modes. The key re-mounts the
+          span so a repeated identical message re-announces. */}
       <div aria-live="polite" role="status" className="sr-only" id="sr-chat-polite">
         <span key={`cp-${chatAnnounceSeq}`}>{chatPoliteMsg}</span>
       </div>

@@ -1237,7 +1237,7 @@ export function useMediasoup() {
         "peer-joined",
         ({ peerId, displayName: name }: { peerId: string; displayName: string }) => {
           store.getState().addPeer(peerId, name);
-          store.getState().announce(announce_joined({ name }));
+          store.getState().announceTransient(announce_joined({ name }));
           const joinTs = Date.now();
           store.getState().addMessage({
             id: `sys-join-${peerId}-${joinTs}`,
@@ -1281,7 +1281,7 @@ export function useMediasoup() {
           // stopping, not as a participant leaving.
           store.getState().announceEvent(announce_music_stopped({ name }));
         } else {
-          store.getState().announce(announce_left({ name }));
+          store.getState().announceTransient(announce_left({ name }));
           const leaveTs = Date.now();
           store.getState().addMessage({
             id: `sys-leave-${peerId}-${leaveTs}`,
@@ -1326,7 +1326,7 @@ export function useMediasoup() {
             announce_a_participant();
           store
             .getState()
-            .announce(
+            .announceTransient(
               action === "cast"
                 ? announce_kick_vote({ voter, target })
                 : announce_kick_vote_withdrawn({ voter, target }),
@@ -1627,15 +1627,16 @@ export function useMediasoup() {
       );
 
       // A remote peer toggled their mic: reflect it, play a soft cue, and speak
-      // it on the polite ARIA region. Unlike other room events this is NOT
-      // logged to chat (announce, not announceEvent) — it'd be too noisy.
+      // it via the room-event channel (announceMode). Unlike other room
+      // events this is NOT logged to chat (announceTransient, not announceEvent)
+      // — it'd be too noisy.
       socket.on("peer-muted", ({ peerId }: { peerId: string }) => {
         store.getState().setPeerMuted(peerId, true);
         // Coalesced per peer so a peer mashing their mic only blips us once or
         // twice, not on every flip (see surfaceToggle).
         surfaceToggle(`peer:${peerId}`, true, () => {
           const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-          store.getState().announce(announce_peer_muted({ name }));
+          store.getState().announceTransient(announce_peer_muted({ name }));
           playCue(sharedAudioContext, "peer-mute");
         });
       });
@@ -1644,7 +1645,7 @@ export function useMediasoup() {
         store.getState().setPeerMuted(peerId, false);
         surfaceToggle(`peer:${peerId}`, false, () => {
           const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-          store.getState().announce(announce_peer_unmuted({ name }));
+          store.getState().announceTransient(announce_peer_unmuted({ name }));
           playCue(sharedAudioContext, "peer-unmute");
         });
       });
@@ -1652,7 +1653,7 @@ export function useMediasoup() {
       // Incoming chat (including the echo of our own messages): render it, chime
       // a distinct cue, and announce it via the user's chosen channel — a polite
       // or assertive ARIA live region, or the browser's spoken TTS (announceChat
-      // reads chatAnnounceMode). Both sent and received messages flow through
+      // reads announceMode). Both sent and received messages flow through
       // here (own messages come back as an echo), so both get announced.
       socket.on("chat-message", (msg: ChatMessage) => {
         store.getState().addMessage(msg);

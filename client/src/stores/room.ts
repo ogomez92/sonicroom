@@ -102,21 +102,55 @@ function loadStreamConfig(): StreamConfig {
   return { ...DEFAULT_STREAM_CONFIG };
 }
 
-// How incoming/outgoing chat messages are spoken to the user. A persisted
-// accessibility preference:
+// How an announcement is conveyed to the user. A single persisted accessibility
+// preference covering BOTH channels — chat messages and room events alike:
 //  - "polite"    — announced on a polite ARIA live region (default; queues
 //                  behind other screen-reader speech).
 //  - "assertive" — announced on an assertive ARIA live region (interrupts).
 //  - "tts"       — read aloud by the browser's speech synthesis, for users who
 //                  do NOT run a screen reader (see lib/tts).
-//  - "off"       — not announced at all (still shown in the chat list).
-export type ChatAnnounceMode = "polite" | "assertive" | "tts" | "off";
+//  - "off"       — not announced at all (chat still shown in the list; room
+//                  events still logged to chat by announceEvent).
+export type AnnounceMode = "polite" | "assertive" | "tts" | "off";
 
-const CHAT_ANNOUNCE_KEY = "sonicroom:chatAnnounceMode";
+function isAnnounceMode(v: string): v is AnnounceMode {
+  return v === "assertive" || v === "tts" || v === "off" || v === "polite";
+}
 
-function loadChatAnnounceMode(): ChatAnnounceMode {
-  const v = loadString(CHAT_ANNOUNCE_KEY);
-  return v === "assertive" || v === "tts" || v === "off" ? v : "polite";
+const ANNOUNCE_KEY = "sonicroom:announceMode";
+// Pre-unification this was the chat-only key; read it as a fallback so anyone
+// who'd already picked a mode keeps it after the upgrade.
+const LEGACY_CHAT_ANNOUNCE_KEY = "sonicroom:chatAnnounceMode";
+// The SpeechSynthesis voiceURI used for spoken (TTS) announcements. "" = the
+// browser/OS default voice. Persisted.
+const TTS_VOICE_KEY = "sonicroom:ttsVoice";
+// Spoken-voice rate (speed) and pitch, persisted. These map onto
+// SpeechSynthesisUtterance.rate / .pitch; 1 is normal for both. Ranges are kept
+// to the universally-supported band (the platform clamps anything outside).
+const TTS_RATE_KEY = "sonicroom:ttsRate";
+const TTS_PITCH_KEY = "sonicroom:ttsPitch";
+export const TTS_RATE_MIN = 0.5;
+export const TTS_RATE_MAX = 2;
+export const TTS_PITCH_MIN = 0;
+export const TTS_PITCH_MAX = 2;
+
+function loadAnnounceMode(): AnnounceMode {
+  const v = loadString(ANNOUNCE_KEY);
+  if (isAnnounceMode(v)) return v;
+  const legacy = loadString(LEGACY_CHAT_ANNOUNCE_KEY);
+  return isAnnounceMode(legacy) ? legacy : "polite";
+}
+
+// Load a persisted TTS rate/pitch, clamped to [min,max]; 1 (normal) on absence
+// or anything unparseable.
+function loadTtsNumber(key: string, min: number, max: number): number {
+  try {
+    const v = parseFloat(localStorage.getItem(key) ?? "");
+    if (Number.isFinite(v)) return Math.min(max, Math.max(min, v));
+  } catch {
+    // localStorage unavailable — fall back to normal.
+  }
+  return 1;
 }
 
 export interface PeerState {
@@ -213,23 +247,41 @@ interface RoomState {
   // auth, …); cleared on a fresh start/stop. Null when there's nothing to show.
   streamError: string | null;
 
-  // Latest screen-reader announcement (peer join/leave, recording, etc.).
-  // `announceSeq` changes on every announce() so React re-renders even when
-  // the same message repeats.
+  // Direct, always-polite local feedback that must speak regardless of any
+  // announce-mode setting: the Alt+number chat readback, "Copied", and the
+  // file-player's own play/pause feedback. `announceSeq` changes on every
+  // announce() so React re-renders even when the same message repeats.
   announcement: string;
   announceSeq: number;
 
-  // Chat-message announcements are kept on their OWN channel, separate from the
-  // general announcement above, so they can follow the user's chatAnnounceMode
-  // (polite / assertive / spoken / off). `chatPoliteMsg` and `chatAssertiveMsg`
-  // feed two always-mounted live regions of the matching politeness — only the
-  // one for the active mode is filled. `chatAnnounceSeq` re-keys the region so
-  // an identical repeated message is still re-announced. (TTS mode speaks via
-  // the browser and leaves both region strings empty.)
-  chatAnnounceMode: ChatAnnounceMode;
+  // A single mode (polite/assertive/spoken/off) drives BOTH announcement
+  // channels below. For spoken mode: `ttsVoiceURI` is the chosen voice ("" =
+  // browser/OS default) and `ttsRate` / `ttsPitch` tune its speed and pitch
+  // (1 = normal for both).
+  announceMode: AnnounceMode;
+  ttsVoiceURI: string;
+  ttsRate: number;
+  ttsPitch: number;
+
+  // Chat-message announcements are kept on their OWN live-region channel,
+  // separate from the general announcement above, and follow announceMode.
+  // `chatPoliteMsg` and `chatAssertiveMsg` feed two always-mounted live regions
+  // of the matching politeness — only the one for the active mode is filled.
+  // `chatAnnounceSeq` re-keys the region so an identical repeated message is
+  // still re-announced. (TTS mode speaks via the browser and leaves both empty.)
   chatPoliteMsg: string;
   chatAssertiveMsg: string;
   chatAnnounceSeq: number;
+
+  // Room-event announcements (join/leave/mute/recording/share/music/…) ride
+  // their OWN region channel too, following the same announceMode — kept
+  // separate from chat so a message and an event don't clobber each other's
+  // live-region text: two always-mounted regions (`roomPoliteMsg` /
+  // `roomAssertiveMsg`), `roomAnnounceSeq` re-keys them, TTS speaks & leaves
+  // both empty.
+  roomPoliteMsg: string;
+  roomAssertiveMsg: string;
+  roomAnnounceSeq: number;
 
   // "Ask to join" (knock-to-join) for public rooms:
   // - joinRequests: people waiting at the door, shown to participants in a modal
@@ -277,10 +329,20 @@ interface RoomState {
   setStreaming: (streaming: boolean) => void;
   setStreamConfig: (config: StreamConfig) => void;
   setStreamError: (error: string | null) => void;
+  // Always-polite local feedback (readback / "Copied" / file play-pause). Never
+  // gated by an announce-mode — it's a direct response to the user's own action.
   announce: (message: string) => void;
+  // A room event that belongs in the chat timeline (recording/share/music/kick/
+  // …): logs it to chat AND speaks it via whichever channel announceMode
+  // selects. announceTransient is the same routing WITHOUT the chat-log (for
+  // noisy events — peer join/leave/mute, vote tallies).
   announceEvent: (message: string) => void;
-  setChatAnnounceMode: (mode: ChatAnnounceMode) => void;
-  // Announce a chat message via whichever channel chatAnnounceMode selects.
+  announceTransient: (message: string) => void;
+  setAnnounceMode: (mode: AnnounceMode) => void;
+  setTtsVoiceURI: (voiceURI: string) => void;
+  setTtsRate: (rate: number) => void;
+  setTtsPitch: (pitch: number) => void;
+  // Announce a chat message via whichever channel announceMode selects.
   announceChat: (message: string) => void;
   setJoinRequests: (requests: JoinRequest[]) => void;
   setAwaitingApproval: (awaiting: boolean) => void;
@@ -299,6 +361,33 @@ interface RoomState {
   // (left undefined for others' votes / membership recounts, keeping our state).
   setPeerKickVote: (peerId: string, votes: number, iVoted?: boolean) => void;
   reset: () => void;
+}
+
+// Compute the live-region patch for a room-event announcement in the active
+// announceMode (and, for "tts", speak it). Mirrors announceChat's routing:
+// fills exactly one of the two region strings (clearing the other) and bumps
+// roomAnnounceSeq so a repeated identical line still re-announces; "tts" speaks
+// via the browser and leaves both empty; "off" announces nothing. The caller
+// merges any extra fields (e.g. the chat-log `messages`) onto the result.
+function roomAnnouncePatch(s: RoomState, message: string): Partial<RoomState> {
+  const roomAnnounceSeq = s.roomAnnounceSeq + 1;
+  switch (s.announceMode) {
+    case "off":
+      return { roomAnnounceSeq };
+    case "tts":
+      speak(message, {
+        lang: s.locale,
+        voiceURI: s.ttsVoiceURI || undefined,
+        rate: s.ttsRate,
+        pitch: s.ttsPitch,
+      });
+      return { roomAnnounceSeq, roomPoliteMsg: "", roomAssertiveMsg: "" };
+    case "assertive":
+      return { roomAnnounceSeq, roomAssertiveMsg: message, roomPoliteMsg: "" };
+    case "polite":
+    default:
+      return { roomAnnounceSeq, roomPoliteMsg: message, roomAssertiveMsg: "" };
+  }
 }
 
 export const useRoomStore = create<RoomState>((set, get) => ({
@@ -329,10 +418,16 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   streamError: null,
   announcement: "",
   announceSeq: 0,
-  chatAnnounceMode: loadChatAnnounceMode(),
+  announceMode: loadAnnounceMode(),
+  ttsVoiceURI: loadString(TTS_VOICE_KEY),
+  ttsRate: loadTtsNumber(TTS_RATE_KEY, TTS_RATE_MIN, TTS_RATE_MAX),
+  ttsPitch: loadTtsNumber(TTS_PITCH_KEY, TTS_PITCH_MIN, TTS_PITCH_MAX),
   chatPoliteMsg: "",
   chatAssertiveMsg: "",
   chatAnnounceSeq: 0,
+  roomPoliteMsg: "",
+  roomAssertiveMsg: "",
+  roomAnnounceSeq: 0,
   joinRequests: [],
   awaitingApproval: false,
   roomIsPublic: false,
@@ -404,32 +499,54 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   setRoomIsPublic: (roomIsPublic) => set({ roomIsPublic }),
   setKicked: (kicked) => set({ kicked }),
 
-  // Room-event announcement (recording/share/music/mute…): speak it AND log it
-  // into the chat history as a "system" entry, so chat is the single timeline
-  // of everything that was ever announced (rule: announcements go to chat).
-  // Bare announce() stays reserved for re-reading chat content that is already
-  // in history (incoming messages, the Alt+number readback).
-  announceEvent: (message) =>
-    set((s) => {
-      const ts = Date.now();
-      const messages = [
-        ...s.messages,
-        {
-          id: `sys-evt-${ts}-${s.announceSeq + 1}`,
-          sender: "",
-          text: message,
-          ts,
-          kind: "system" as const,
-        },
-      ];
-      if (messages.length > CHAT_MESSAGES_MAX)
-        messages.splice(0, messages.length - CHAT_MESSAGES_MAX);
-      return { announcement: message, announceSeq: s.announceSeq + 1, messages };
-    }),
+  // Room-event announcement (recording/share/music/mute…): log it into the chat
+  // history as a "system" entry — so chat is the single timeline of everything
+  // that was ever announced (rule: announcements go to chat) — AND speak it via
+  // whichever channel announceMode selects (polite/assertive region, TTS, or
+  // off). "off" still logs to chat; it just isn't spoken.
+  announceEvent: (message) => {
+    const s = get();
+    const ts = Date.now();
+    const messages = [
+      ...s.messages,
+      {
+        id: `sys-evt-${ts}-${s.roomAnnounceSeq + 1}`,
+        sender: "",
+        text: message,
+        ts,
+        kind: "system" as const,
+      },
+    ];
+    if (messages.length > CHAT_MESSAGES_MAX)
+      messages.splice(0, messages.length - CHAT_MESSAGES_MAX);
+    set({ ...roomAnnouncePatch(s, message), messages });
+  },
 
-  setChatAnnounceMode: (mode) => {
-    saveString(CHAT_ANNOUNCE_KEY, mode);
-    set({ chatAnnounceMode: mode });
+  // A transient room event that should NOT clutter the chat timeline — peer
+  // join/leave, mute/unmute, vote tallies. Same announceMode routing as
+  // announceEvent, just without the chat log.
+  announceTransient: (message) => set(roomAnnouncePatch(get(), message)),
+
+  setAnnounceMode: (mode) => {
+    saveString(ANNOUNCE_KEY, mode);
+    set({ announceMode: mode });
+  },
+
+  setTtsVoiceURI: (ttsVoiceURI) => {
+    saveString(TTS_VOICE_KEY, ttsVoiceURI);
+    set({ ttsVoiceURI });
+  },
+
+  setTtsRate: (rate) => {
+    const ttsRate = Math.min(TTS_RATE_MAX, Math.max(TTS_RATE_MIN, rate));
+    saveString(TTS_RATE_KEY, String(ttsRate));
+    set({ ttsRate });
+  },
+
+  setTtsPitch: (pitch) => {
+    const ttsPitch = Math.min(TTS_PITCH_MAX, Math.max(TTS_PITCH_MIN, pitch));
+    saveString(TTS_PITCH_KEY, String(ttsPitch));
+    set({ ttsPitch });
   },
 
   // Route a chat-message announcement to the channel the user chose. Each call
@@ -440,12 +557,17 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   announceChat: (message) => {
     const s = get();
     const chatAnnounceSeq = s.chatAnnounceSeq + 1;
-    switch (s.chatAnnounceMode) {
+    switch (s.announceMode) {
       case "off":
         set({ chatAnnounceSeq });
         return;
       case "tts":
-        speak(message, s.locale);
+        speak(message, {
+          lang: s.locale,
+          voiceURI: s.ttsVoiceURI || undefined,
+          rate: s.ttsRate,
+          pitch: s.ttsPitch,
+        });
         set({ chatAnnounceSeq, chatPoliteMsg: "", chatAssertiveMsg: "" });
         return;
       case "assertive":
@@ -569,10 +691,14 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       streamError: null,
       announcement: "",
       announceSeq: 0,
-      // Keep chatAnnounceMode (a persisted preference); only the live strings reset.
+      // Keep announceMode / ttsVoiceURI (persisted preferences); only the live
+      // announcement strings reset.
       chatPoliteMsg: "",
       chatAssertiveMsg: "",
       chatAnnounceSeq: 0,
+      roomPoliteMsg: "",
+      roomAssertiveMsg: "",
+      roomAnnounceSeq: 0,
       joinRequests: [],
       awaitingApproval: false,
       roomIsPublic: false,

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, X } from "lucide-react";
-import { useRoomStore, type ChatAnnounceMode } from "../stores/room";
+import { useRoomStore, type AnnounceMode } from "../stores/room";
 import { relativeTime, messageContent, META_SEP } from "../lib/chat";
-import { warmUpTts } from "../lib/tts";
+import { getVoices, warmUpTts } from "../lib/tts";
 import { m } from "../paraglide/messages.js";
 
 interface ChatProps {
@@ -22,9 +22,18 @@ interface ChatProps {
 export function Chat({ onSend, onClose, focusSignal }: ChatProps) {
   const messages = useRoomStore((s) => s.messages);
   const announce = useRoomStore((s) => s.announce);
-  const chatAnnounceMode = useRoomStore((s) => s.chatAnnounceMode);
-  const setChatAnnounceMode = useRoomStore((s) => s.setChatAnnounceMode);
+  // The unified announcement controls live here in the chat header: the mode
+  // (polite/assertive/spoken/off) and — when spoken — the voice. Both drive
+  // chat messages AND room events (the store routes through them); the spoken
+  // voice's speed/pitch + preview stay in Audio settings.
+  const announceMode = useRoomStore((s) => s.announceMode);
+  const setAnnounceMode = useRoomStore((s) => s.setAnnounceMode);
+  const ttsVoiceURI = useRoomStore((s) => s.ttsVoiceURI);
+  const setTtsVoiceURI = useRoomStore((s) => s.setTtsVoiceURI);
   const [text, setText] = useState("");
+  // Speech-synthesis voices for the voice picker. Often empty on first read, so
+  // we also listen for `voiceschanged` (Chrome loads them async).
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>(() => getVoices());
   // Active listbox option (roving via aria-activedescendant). -1 = none yet.
   const [activeIdx, setActiveIdx] = useState(-1);
   // Ticks so "x minutes ago" stays roughly fresh without per-message timers.
@@ -38,6 +47,18 @@ export function Chat({ onSend, onClose, focusSignal }: ChatProps) {
     const id = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  // Keep the voice list fresh. The engine may populate it after first paint.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const load = () => setVoices(getVoices());
+    load();
+    window.speechSynthesis.addEventListener("voiceschanged", load);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", load);
+  }, []);
+
+  // A stored voice that's no longer installed falls back to the system default.
+  const voiceValue = voices.some((v) => v.voiceURI === ttsVoiceURI) ? ttsVoiceURI : "";
 
   // Drop focus into the composer when the panel opens, and again whenever the
   // caller bumps focusSignal (e.g. the join modal just closed).
@@ -129,23 +150,23 @@ export function Chat({ onSend, onClose, focusSignal }: ChatProps) {
       <header className="flex items-center justify-between gap-2 border-b border-sonic-700 px-4 py-2.5">
         <h2 className="text-sm font-semibold text-sonic-100">{m.chat_heading()}</h2>
         <div className="flex items-center gap-1.5">
-          {/* How new messages are announced: a polite or assertive ARIA live
+          {/* How announcements are conveyed — a polite or assertive ARIA live
               region, the browser's spoken voice (for users without a screen
-              reader), or off. Persisted. Choosing "spoken" warms up speech
-              synthesis from within this gesture so the first message isn't
-              dropped. */}
+              reader), or off. Drives BOTH chat messages and room events.
+              Persisted. Choosing "spoken" warms up speech synthesis from within
+              this gesture so the first announcement isn't dropped. */}
           <label htmlFor="chat-announce-mode" className="sr-only">
-            {m.chat_announce_label()}
+            {m.settings_announce_label()}
           </label>
           <select
             id="chat-announce-mode"
-            value={chatAnnounceMode}
+            value={announceMode}
             onChange={(e) => {
-              const mode = e.target.value as ChatAnnounceMode;
+              const mode = e.target.value as AnnounceMode;
               if (mode === "tts") warmUpTts();
-              setChatAnnounceMode(mode);
+              setAnnounceMode(mode);
             }}
-            title={m.chat_announce_label()}
+            title={m.settings_announce_label()}
             className="rounded-md border border-sonic-600 bg-sonic-900 px-1.5 py-1 text-xs text-sonic-200 focus:border-sonic-accent focus:outline-none"
           >
             <option value="polite">{m.chat_announce_polite()}</option>
@@ -153,6 +174,32 @@ export function Chat({ onSend, onClose, focusSignal }: ChatProps) {
             <option value="tts">{m.chat_announce_tts()}</option>
             <option value="off">{m.chat_announce_off()}</option>
           </select>
+
+          {/* The spoken voice — only relevant in TTS mode and when the browser
+              offers voices. Width-capped so long voice names truncate in the
+              narrow panel; speed/pitch/preview for it live in Audio settings. */}
+          {announceMode === "tts" && voices.length > 0 && (
+            <>
+              <label htmlFor="chat-announce-voice" className="sr-only">
+                {m.settings_announce_voice_label()}
+              </label>
+              <select
+                id="chat-announce-voice"
+                value={voiceValue}
+                onChange={(e) => setTtsVoiceURI(e.target.value)}
+                title={m.settings_announce_voice_label()}
+                className="max-w-[7rem] rounded-md border border-sonic-600 bg-sonic-900 px-1.5 py-1 text-xs text-sonic-200 focus:border-sonic-accent focus:outline-none"
+              >
+                <option value="">{m.settings_announce_voice_system_default()}</option>
+                {voices.map((v) => (
+                  <option key={v.voiceURI} value={v.voiceURI}>
+                    {v.name} ({v.lang})
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+
           <button
             onClick={onClose}
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sonic-300 hover:bg-sonic-700 hover:text-sonic-100"
