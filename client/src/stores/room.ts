@@ -133,6 +133,12 @@ export interface PeerState {
   // kick button's aria-pressed). Both 0/false outside a public room.
   kickVotes: number;
   iVotedKick: boolean;
+  // Per-LISTENER local mute (this client only, never signaled to the server or
+  // other peers). When true, effectiveGain() returns 0 for this peer/stream
+  // regardless of volume — i.e. you silence one participant or stream just for
+  // yourself. Distinct from `isMuted` (the peer's own mic mute, server-reported)
+  // and from room-wide deafen.
+  localMuted: boolean;
 }
 
 export type RoomMode = "p2p" | "sfu";
@@ -286,6 +292,8 @@ interface RoomState {
   setPeerSpeaking: (peerId: string, speaking: boolean) => void;
   setPeerMuted: (peerId: string, muted: boolean) => void;
   setPeerVolume: (peerId: string, volume: number) => void;
+  // Toggle our local (listener-side) mute of one peer/stream. Pure client state.
+  setPeerLocalMute: (peerId: string, muted: boolean) => void;
   setPeerMusic: (peerId: string, isMusic: boolean) => void;
   // Update a peer's vote-to-kick tally; `iVoted` is set only when WE toggled
   // (left undefined for others' votes / membership recounts, keeping our state).
@@ -473,6 +481,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
         isMusic: false,
         kickVotes: 0,
         iVotedKick: false,
+        localMuted: false,
       });
       return { peers };
     }),
@@ -505,6 +514,14 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       const peers = new Map(state.peers);
       const peer = peers.get(peerId);
       if (peer) peers.set(peerId, { ...peer, volume });
+      return { peers };
+    }),
+
+  setPeerLocalMute: (peerId, muted) =>
+    set((state) => {
+      const peers = new Map(state.peers);
+      const peer = peers.get(peerId);
+      if (peer) peers.set(peerId, { ...peer, localMuted: muted });
       return { peers };
     }),
 

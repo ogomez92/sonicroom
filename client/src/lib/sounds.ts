@@ -354,7 +354,7 @@ export function playCue(ctx: AudioContext, cue: Cue) {
       tone(ctx, { freq: 659, dur: 0.09, type: "triangle", gain: 0.12, delay: 0.08 });
       tone(ctx, { freq: 523, dur: 0.13, type: "triangle", gain: 0.12, delay: 0.16 });
       break;
-    // Someone is asking to be let in → two soft wooden knocks (see `knock`).
+    // Someone is asking to be let in → a hard triple rap on the door (see `knock`).
     case "knock":
       knock(ctx, 0);
       break;
@@ -370,28 +370,42 @@ export function playCue(ctx: AudioContext, cue: Cue) {
   }
 }
 
-// The knock timbre — two soft wooden knocks (a knuckle on the door): a low
-// pitch-dropping thud with a lowpassed noise body, scheduled at offset `at`.
-// Subtle but recognizable. Works on a real OR an offline (render) context.
+// The knock timbre — three hard, rapid raps (a fist pounding the door, not a
+// polite knuckle-tap): each rap is a low pitch-dropping thud with a wooden
+// lowpass body AND a bright bandpass crack on top, scheduled at offset `at`.
+// The fast triplet + brighter snap + higher gain read as urgent/insistent.
+// Works on a real OR an offline (render) context.
 function knock(ctx: BaseAudioContext, at: number) {
-  for (const d of [0, 0.17]) {
+  for (const d of [0, 0.13, 0.26]) {
+    // The thud — punchier and a touch lower than the old polite tap.
     tone(ctx, {
-      freq: 190,
-      glideTo: 90,
-      dur: 0.07,
+      freq: 220,
+      glideTo: 80,
+      dur: 0.08,
       type: "sine",
-      gain: 0.22,
+      gain: 0.34,
       delay: at + d,
-      attack: 0.002,
+      attack: 0.001,
     });
+    // Wooden body, opened up brighter so it cuts through.
     noise(ctx, {
-      dur: 0.05,
-      freq: 360,
-      gain: 0.16,
+      dur: 0.06,
+      freq: 800,
+      gain: 0.26,
       type: "lowpass",
       q: 0.8,
       delay: at + d,
-      attack: 0.002,
+      attack: 0.001,
+    });
+    // Hard knuckle/fist crack — the high-frequency snap that makes it bite.
+    noise(ctx, {
+      dur: 0.02,
+      freq: 2600,
+      gain: 0.22,
+      type: "bandpass",
+      q: 2,
+      delay: at + d,
+      attack: 0.001,
     });
   }
 }
@@ -404,7 +418,7 @@ function knock(ctx: BaseAudioContext, at: number) {
 // repeating on the audio rendering thread regardless of tab focus, as long as
 // the context is running (the same reason chat/join cues are audible in a
 // background tab). Returns a stop function.
-export function startKnockLoop(ctx: AudioContext, periodSec = 2.6): () => void {
+export function startKnockLoop(ctx: AudioContext, periodSec = 1.7): () => void {
   if (ctx.state === "suspended") void ctx.resume();
 
   let stopped = false;

@@ -5,7 +5,7 @@ import { useRoomStore } from "../stores/room";
 import { useMediasoup } from "../hooks/useMediasoup";
 import { formatMessage, messageContent } from "../lib/chat";
 import { getInstanceName } from "../lib/branding";
-import { ParticipantCard } from "./ParticipantCard";
+import { ParticipantList } from "./ParticipantList";
 import { AudioControls } from "./AudioControls";
 import { FileStreamPlayer } from "./FileStreamPlayer";
 import { AudioSourceDialog } from "./AudioSourceDialog";
@@ -86,6 +86,7 @@ export function Room() {
     startStreaming,
     stopStreaming,
     setPeerVolume,
+    setPeerLocalMute,
     setMicGain,
     sendChatMessage,
     decideJoinRequest,
@@ -160,6 +161,8 @@ export function Room() {
   const messages = useRoomStore((s) => s.messages);
   const announcement = useRoomStore((s) => s.announcement);
   const announceSeq = useRoomStore((s) => s.announceSeq);
+  // Bare (transient) announcer for local mute toggles — not logged to chat.
+  const announce = useRoomStore((s) => s.announce);
   // Chat-message announcements ride their own polite/assertive regions, driven
   // by the user's chatAnnounceMode (the other mode, TTS, speaks via the browser
   // and leaves both strings empty).
@@ -481,45 +484,33 @@ export function Room() {
       {/* Participants grid + optional chat side panel */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <main className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto p-6">
-          <div
-            className="grid w-full max-w-4xl grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4"
-            role="list"
-            aria-label={m.room_participants_label()}
-          >
-            {/* Local user */}
-            {localPeerId && displayName && (
-              <ParticipantCard
-                peer={{
-                  peerId: localPeerId,
-                  displayName,
-                  isSpeaking: false,
-                  isMuted,
-                  volume: 1,
-                  isMusic: false,
-                  kickVotes: 0,
-                  iVotedKick: false,
-                }}
-                isLocal
-                // No mic → no mic-level slider, and a "text only" indicator.
-                textOnly={!hasMic}
-                micGain={micGain}
-                onMicGainChange={hasMic ? setMicGain : undefined}
-              />
-            )}
-
-            {/* Remote peers. In a public room, each non-music peer gets a
-                vote-to-kick toggle (no moderators — the room decides). */}
-            {peerList.map((peer) => (
-              <ParticipantCard
-                key={peer.peerId}
-                peer={peer}
-                isLocal={false}
-                onVolumeChange={(v) => setPeerVolume(peer.peerId, v)}
-                canKick={kickEnabled && !peer.isMusic}
-                onToggleKick={() => voteKick(peer.peerId, !peer.iVotedKick)}
-              />
-            ))}
-          </div>
+          {/* Self + everyone (and every stream) as one keyboard-navigable
+              listbox; Enter on a row opens that participant's options (volume,
+              local mute, vote-to-kick), self's being the mic level. */}
+          {localPeerId && displayName && (
+            <ParticipantList
+              selfPeer={{
+                peerId: localPeerId,
+                displayName,
+                isSpeaking: false,
+                isMuted,
+                volume: 1,
+                isMusic: false,
+                kickVotes: 0,
+                iVotedKick: false,
+                localMuted: false,
+              }}
+              peerList={peerList}
+              hasMic={hasMic}
+              micGain={micGain}
+              onMicGainChange={hasMic ? setMicGain : undefined}
+              onVolumeChange={setPeerVolume}
+              onLocalMuteChange={setPeerLocalMute}
+              kickEnabled={kickEnabled}
+              onToggleKick={(id) => voteKick(id, !peers.get(id)?.iVotedKick)}
+              announce={announce}
+            />
+          )}
         </main>
 
         {chatOpen && (

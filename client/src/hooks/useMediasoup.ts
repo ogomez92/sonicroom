@@ -306,7 +306,8 @@ export function useMediasoup() {
     (peerId: string): number => {
       const state = store.getState();
       const peer = state.peers.get(peerId);
-      if (!peer || state.isDeafened) return 0;
+      // No peer, room-wide deafen, or you locally muted this one → silence.
+      if (!peer || state.isDeafened || peer.localMuted) return 0;
       // Ducking is gated by the room-wide toggle: with it off, music-type
       // streams (caster/share/file) never dip under voice.
       if (peer.isMusic && isVoiceActiveRef.current && state.duckingEnabled)
@@ -1765,6 +1766,23 @@ export function useMediasoup() {
     [store, effectiveGain],
   );
 
+  // Local (listener-side) mute of one peer/stream: pure client-side, ramps that
+  // peer's gain to 0 (via effectiveGain) and back. Never signaled to the server.
+  const setPeerLocalMute = useCallback(
+    (peerId: string, muted: boolean) => {
+      store.getState().setPeerLocalMute(peerId, muted);
+      const peerAudio = peerAudiosRef.current.get(peerId);
+      if (peerAudio) {
+        peerAudio.gainNode.gain.setTargetAtTime(
+          effectiveGain(peerId),
+          sharedAudioContext.currentTime,
+          GAIN_RAMP,
+        );
+      }
+    },
+    [store, effectiveGain],
+  );
+
   // --- Audio share: cast system/tab audio as a SEPARATE stereo producer ---
   // The shared audio gets its own destination (shareDest) and its own stereo
   // "share" producer, so the voice track is never touched.
@@ -2254,6 +2272,7 @@ export function useMediasoup() {
     stopStreaming,
     toggleStreaming,
     setPeerVolume,
+    setPeerLocalMute,
     setMicGain,
     sendChatMessage,
     peerAudiosRef,
