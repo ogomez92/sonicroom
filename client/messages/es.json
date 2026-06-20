@@ -202,6 +202,8 @@
   "participants_muted_fragment": "silenciado por ti",
   "participants_no_options": "No hay opciones disponibles",
   "participants_level_value": "{label}, {percent} %",
+  "participants_level_percent": "{percent} %",
+  "participants_open_hint": "pulsa Enter para abrir las opciones de este participante",
 
   "announce_a_participant": "Un participante",
   "announce_joined": "{name} entró a la sala",

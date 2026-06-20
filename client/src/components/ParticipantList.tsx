@@ -127,6 +127,8 @@ export function ParticipantList({
     if (kickEnabled && !peer.isMusic && !self && peer.kickVotes > 0) {
       label += `, ${peer.kickVotes === 1 ? m.card_votes_one() : m.card_votes_many({ count: peer.kickVotes })}`;
     }
+    // Affordance hint last, so the name/status is heard first.
+    label += `, ${m.participants_open_hint()}`;
     return label;
   };
 
@@ -268,7 +270,14 @@ export function ParticipantList({
               <Mic className="h-4 w-4 shrink-0 text-sonic-300" aria-hidden="true" />
             )}
 
-            <ChevronRight className="h-4 w-4 shrink-0 text-sonic-500" aria-hidden="true" />
+            {/* Expand affordance — visibly indicates the row opens options on
+                click / Enter (the aria-label says the same). */}
+            <ChevronRight
+              className={`h-4 w-4 shrink-0 transition-colors ${
+                i === activeIdx ? "text-sonic-accent" : "text-sonic-300"
+              }`}
+              aria-hidden="true"
+            />
           </li>
         );
       })}
@@ -417,7 +426,9 @@ function ParticipantOptions({
   const changeSlider = (opt: OptionDef, v: number) => {
     const next = clampVol(v);
     opt.setValue?.(next);
-    announce(m.participants_level_value({ label: opt.baseLabel ?? "", percent: toPercent(next) }));
+    // On each step announce only the value — the name/label was already heard
+    // when arriving on the option (it stays in the option's resting aria-label).
+    announce(m.participants_level_percent({ percent: toPercent(next) }));
   };
 
   // Escape / Backspace return to the list (handled on the outer container so it

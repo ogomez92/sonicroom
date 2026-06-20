@@ -202,6 +202,8 @@
   "participants_muted_fragment": "coupé par vous",
   "participants_no_options": "Aucune option disponible",
   "participants_level_value": "{label}, {percent} %",
+  "participants_level_percent": "{percent} %",
+  "participants_open_hint": "appuyez sur Entrée pour ouvrir les options de ce participant",
 
   "announce_a_participant": "Un participant",
   "announce_joined": "{name} a rejoint le salon",
