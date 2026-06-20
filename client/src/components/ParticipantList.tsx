@@ -124,7 +124,7 @@ export function ParticipantList({
     else if (peer.isMuted) label += `, ${m.card_muted_fragment()}`;
     if (peer.isSpeaking) label += `, ${m.card_speaking_fragment()}`;
     if (peer.localMuted) label += `, ${m.participants_muted_fragment()}`;
-    if (kickEnabled && !peer.isMusic && !self && peer.kickVotes > 0) {
+    if (kickEnabled && !peer.isMusic && !peer.isMicStream && !self && peer.kickVotes > 0) {
       label += `, ${peer.kickVotes === 1 ? m.card_votes_one() : m.card_votes_many({ count: peer.kickVotes })}`;
     }
     // Affordance hint last, so the name/status is heard first.
@@ -175,7 +175,9 @@ export function ParticipantList({
         onMicGainChange={onMicGainChange}
         onVolumeChange={onVolumeChange}
         onLocalMuteChange={onLocalMuteChange}
-        showKick={kickEnabled && !openPeer.isMusic && !isSelf(openPeer.peerId)}
+        showKick={
+          kickEnabled && !openPeer.isMusic && !openPeer.isMicStream && !isSelf(openPeer.peerId)
+        }
         onToggleKick={onToggleKick}
         announce={announce}
         onClose={closeOptions}
@@ -200,7 +202,8 @@ export function ParticipantList({
       {rows.map((peer, i) => {
         const self = isSelf(peer.peerId);
         const textOnly = self && !hasMic;
-        const flaggedForKick = kickEnabled && !peer.isMusic && !self && peer.kickVotes > 0;
+        const flaggedForKick =
+          kickEnabled && !peer.isMusic && !peer.isMicStream && !self && peer.kickVotes > 0;
         return (
           <li
             key={peer.peerId}
@@ -225,14 +228,20 @@ export function ParticipantList({
             <div
               aria-hidden="true"
               className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                peer.isMusic
+                peer.isMusic || peer.isMicStream
                   ? "border-2 border-sonic-accent bg-sonic-accent/20 text-sonic-accent"
                   : peer.isSpeaking
                     ? "speaking-ring border-2 border-speaking bg-speaking/20 text-speaking"
                     : "border-2 border-sonic-500 bg-sonic-700 text-sonic-200"
               }`}
             >
-              {peer.isMusic ? <Music className="h-4 w-4" /> : getInitials(peer.displayName)}
+              {peer.isMusic ? (
+                <Music className="h-4 w-4" />
+              ) : peer.isMicStream ? (
+                <Mic className="h-4 w-4" />
+              ) : (
+                getInitials(peer.displayName)
+              )}
             </div>
 
             {/* Name + badges */}
@@ -262,6 +271,8 @@ export function ParticipantList({
               <VolumeX className="h-4 w-4 shrink-0 text-sonic-400" aria-hidden="true" />
             ) : peer.isMusic ? (
               <Music className="h-4 w-4 shrink-0 text-sonic-accent" aria-hidden="true" />
+            ) : peer.isMicStream ? (
+              <Mic className="h-4 w-4 shrink-0 text-sonic-accent" aria-hidden="true" />
             ) : textOnly ? (
               <MicOff className="h-4 w-4 shrink-0 text-sonic-400" aria-hidden="true" />
             ) : peer.isMuted ? (

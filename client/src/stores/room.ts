@@ -65,6 +65,44 @@ function loadHifiVoice(): boolean {
   }
 }
 
+// Extra microphones to stream: which input device ids the user has opted to
+// stream as separate "mic" producers (in addition to the primary voice mic),
+// and a per-device mono/stereo choice. Persisted per-device preferences (like
+// micDeviceId), carried from the lobby into the call. Stored as JSON, mirroring
+// streamConfig.
+const STREAMED_MICS_KEY = "sonicroom:streamedMicDeviceIds";
+const MIC_STEREO_KEY = "sonicroom:micStereoByDevice";
+
+function loadStreamedMicDeviceIds(): string[] {
+  try {
+    const raw = localStorage.getItem(STREAMED_MICS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((d): d is string => typeof d === "string");
+    }
+  } catch {
+    // Missing/corrupt/unavailable — none selected.
+  }
+  return [];
+}
+
+function loadMicStereoByDevice(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(MIC_STEREO_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const out: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(parsed)) if (typeof v === "boolean") out[k] = v;
+        return out;
+      }
+    }
+  } catch {
+    // Missing/corrupt/unavailable — default mono for every device.
+  }
+  return {};
+}
+
 // Icecast streaming target. Persisted (incl. password) so the user configures
 // it once and can re-stream without retyping — same "remember my settings"
 // treatment as the mic/speaker choice. Sent to the server on start-streaming
@@ -128,6 +166,11 @@ export interface PeerState {
   // True for a send-only "music caster" peer (e.g. Ecobox): rendered with a
   // music icon and treated as a media source rather than a talking participant.
   isMusic: boolean;
+  // True for an EXTRA-microphone stream tile (a peer's additional input device,
+  // a separate "mic" producer keyed by producerId). Like `isMusic` it's a media
+  // tile, not a votable human, so it's excluded from vote-to-kick — but UNLIKE
+  // `isMusic` it is voice-like and NOT ducked (ducking keys on isMusic only).
+  isMicStream: boolean;
   // Vote-to-kick (public rooms): how many people have voted to remove this peer
   // (server-authoritative tally), and whether WE are one of them (drives the
   // kick button's aria-pressed). Both 0/false outside a public room.
@@ -198,6 +241,12 @@ interface RoomState {
   // Opt-in hi-fi voice (stereo, ~128 kbps). Default off → mono ~64 kbps.
   // Read at call start (join / P2P offer / produce); applies on the next call.
   hifiVoiceEnabled: boolean;
+  // Extra input devices to stream as separate "mic" producers (alongside the
+  // primary voice mic), and each one's mono/stereo choice (default mono). The
+  // in-call graph reconciles producers to match these (see useMediasoup); the
+  // picker lives in DeviceSettings. Persisted, carried from the lobby.
+  streamedMicDeviceIds: string[];
+  micStereoByDevice: Record<string, boolean>;
 
   // Recording (a recording belongs to the room; visible to everyone)
   isRecording: boolean;
@@ -273,6 +322,10 @@ interface RoomState {
   setSpeakerDeviceId: (deviceId: string) => void;
   setVoiceProcessingEnabled: (enabled: boolean) => void;
   setHifiVoiceEnabled: (enabled: boolean) => void;
+  // Replace the full set of extra mics to stream (the picker writes the new list).
+  setStreamedMicDeviceIds: (deviceIds: string[]) => void;
+  // Set one device's mono(false)/stereo(true) choice.
+  setMicStereoForDevice: (deviceId: string, stereo: boolean) => void;
   setRecording: (recording: boolean, recordingId?: string | null) => void;
   setStreaming: (streaming: boolean) => void;
   setStreamConfig: (config: StreamConfig) => void;
@@ -295,6 +348,10 @@ interface RoomState {
   // Toggle our local (listener-side) mute of one peer/stream. Pure client state.
   setPeerLocalMute: (peerId: string, muted: boolean) => void;
   setPeerMusic: (peerId: string, isMusic: boolean) => void;
+  setPeerMicStream: (peerId: string, isMicStream: boolean) => void;
+  // Rename a tile (used when a file streamer swaps files mid-stream: the producer
+  // — and thus its tile, keyed by producerId — persists, only its label changes).
+  setPeerName: (peerId: string, displayName: string) => void;
   // Update a peer's vote-to-kick tally; `iVoted` is set only when WE toggled
   // (left undefined for others' votes / membership recounts, keeping our state).
   setPeerKickVote: (peerId: string, votes: number, iVoted?: boolean) => void;
@@ -322,6 +379,8 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   speakerDeviceId: loadString(SPEAKER_DEVICE_KEY),
   voiceProcessingEnabled: loadVoiceProcessing(),
   hifiVoiceEnabled: loadHifiVoice(),
+  streamedMicDeviceIds: loadStreamedMicDeviceIds(),
+  micStereoByDevice: loadMicStereoByDevice(),
   isRecording: false,
   recordingId: null,
   isStreaming: false,
@@ -383,6 +442,16 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     saveString(HIFI_VOICE_KEY, String(hifiVoiceEnabled));
     set({ hifiVoiceEnabled });
   },
+  setStreamedMicDeviceIds: (streamedMicDeviceIds) => {
+    saveString(STREAMED_MICS_KEY, JSON.stringify(streamedMicDeviceIds));
+    set({ streamedMicDeviceIds });
+  },
+  setMicStereoForDevice: (deviceId, stereo) =>
+    set((s) => {
+      const micStereoByDevice = { ...s.micStereoByDevice, [deviceId]: stereo };
+      saveString(MIC_STEREO_KEY, JSON.stringify(micStereoByDevice));
+      return { micStereoByDevice };
+    }),
   setRecording: (isRecording, recordingId) =>
     set((s) => ({
       isRecording,
@@ -479,6 +548,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
         isMuted: false,
         volume: 1,
         isMusic: false,
+        isMicStream: false,
         kickVotes: 0,
         iVotedKick: false,
         localMuted: false,
@@ -530,6 +600,22 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       const peers = new Map(state.peers);
       const peer = peers.get(peerId);
       if (peer) peers.set(peerId, { ...peer, isMusic });
+      return { peers };
+    }),
+
+  setPeerMicStream: (peerId, isMicStream) =>
+    set((state) => {
+      const peers = new Map(state.peers);
+      const peer = peers.get(peerId);
+      if (peer) peers.set(peerId, { ...peer, isMicStream });
+      return { peers };
+    }),
+
+  setPeerName: (peerId, displayName) =>
+    set((state) => {
+      const peers = new Map(state.peers);
+      const peer = peers.get(peerId);
+      if (peer) peers.set(peerId, { ...peer, displayName });
       return { peers };
     }),
 

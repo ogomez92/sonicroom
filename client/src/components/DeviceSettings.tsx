@@ -13,10 +13,14 @@ export function DeviceSettings() {
   const speakerDeviceId = useRoomStore((s) => s.speakerDeviceId);
   const voiceProcessingEnabled = useRoomStore((s) => s.voiceProcessingEnabled);
   const hifiVoiceEnabled = useRoomStore((s) => s.hifiVoiceEnabled);
+  const streamedMicDeviceIds = useRoomStore((s) => s.streamedMicDeviceIds);
+  const micStereoByDevice = useRoomStore((s) => s.micStereoByDevice);
   const setMicDeviceId = useRoomStore((s) => s.setMicDeviceId);
   const setSpeakerDeviceId = useRoomStore((s) => s.setSpeakerDeviceId);
   const setVoiceProcessingEnabled = useRoomStore((s) => s.setVoiceProcessingEnabled);
   const setHifiVoiceEnabled = useRoomStore((s) => s.setHifiVoiceEnabled);
+  const setStreamedMicDeviceIds = useRoomStore((s) => s.setStreamedMicDeviceIds);
+  const setMicStereoForDevice = useRoomStore((s) => s.setMicStereoForDevice);
 
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
@@ -25,6 +29,7 @@ export function DeviceSettings() {
   const speakerSelectId = useId();
   const voiceProcessingId = useId();
   const hifiVoiceId = useId();
+  const extraMicsId = useId();
 
   const refresh = useCallback(async () => {
     try {
@@ -48,6 +53,17 @@ export function DeviceSettings() {
   // constraints use `ideal`, so capture falls back to the default device too.
   const micValue = mics.some((d) => d.deviceId === micDeviceId) ? micDeviceId : "";
   const speakerValue = speakers.some((d) => d.deviceId === speakerDeviceId) ? speakerDeviceId : "";
+
+  // Input devices offered as EXTRA streams: every mic except the primary voice
+  // device (and the empty "Default" id), so the same capture can't stream twice.
+  const extraMics = mics.filter((d) => d.deviceId && d.deviceId !== micDeviceId);
+
+  // Check/uncheck a device for extra streaming. The in-call graph reconciles
+  // producers to match (see useMediasoup's effect); in the lobby it's just saved.
+  const toggleExtraMic = (deviceId: string, checked: boolean) => {
+    const without = streamedMicDeviceIds.filter((d) => d !== deviceId);
+    setStreamedMicDeviceIds(checked ? [...without, deviceId] : without);
+  };
 
   const selectClass =
     "w-full rounded-lg border border-sonic-600 bg-sonic-700 px-2.5 py-1.5 text-sm text-sonic-100 transition-colors focus:border-sonic-accent focus:outline-none";
@@ -148,6 +164,72 @@ export function DeviceSettings() {
           {m.settings_hifi_voice_hint()}
         </p>
       </div>
+
+      {/* Extra microphones: each checked device streams as its OWN audio (a
+          separate "mic" producer alongside your main mic), with a per-device
+          mono/stereo choice. A real checkbox list — shown once device names are
+          known (after mic permission). The primary mic is excluded so the same
+          capture can't be streamed twice. */}
+      {mics.length > 0 && (
+        <div>
+          <p id={extraMicsId} className="mb-1 text-xs font-medium text-sonic-300">
+            {m.settings_extra_mics_label()}
+          </p>
+          {extraMics.length === 0 ? (
+            <p className="text-xs text-sonic-400">{m.settings_extra_mics_empty()}</p>
+          ) : (
+            <ul role="list" aria-labelledby={extraMicsId} className="space-y-2">
+              {extraMics.map((d, i) => {
+                const name = d.label || m.settings_mic_fallback({ n: i + 1 });
+                const checked = streamedMicDeviceIds.includes(d.deviceId);
+                const stereo = !!micStereoByDevice[d.deviceId];
+                const rowName = `${extraMicsId}-ch-${i}`;
+                return (
+                  <li key={d.deviceId}>
+                    <label className="flex cursor-pointer select-none items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => toggleExtraMic(d.deviceId, e.target.checked)}
+                        aria-label={m.settings_extra_mic_stream_label({ name })}
+                        className="h-4 w-4 shrink-0 rounded border-sonic-600 bg-sonic-700 accent-sonic-accent"
+                      />
+                      <span className="truncate text-xs text-sonic-200">{name}</span>
+                    </label>
+                    {checked && (
+                      <fieldset
+                        className="mt-1 flex gap-3 pl-[26px]"
+                        aria-label={m.settings_extra_mic_channels_label({ name })}
+                      >
+                        <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-sonic-300">
+                          <input
+                            type="radio"
+                            name={rowName}
+                            checked={!stereo}
+                            onChange={() => setMicStereoForDevice(d.deviceId, false)}
+                            className="h-3.5 w-3.5 accent-sonic-accent"
+                          />
+                          {m.settings_extra_mic_mono()}
+                        </label>
+                        <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-sonic-300">
+                          <input
+                            type="radio"
+                            name={rowName}
+                            checked={stereo}
+                            onChange={() => setMicStereoForDevice(d.deviceId, true)}
+                            className="h-3.5 w-3.5 accent-sonic-accent"
+                          />
+                          {m.settings_extra_mic_stereo()}
+                        </label>
+                      </fieldset>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Browsers hide device names until mic permission is granted (e.g. in
           the lobby before the first test) — explain the bare lists. Tied to the

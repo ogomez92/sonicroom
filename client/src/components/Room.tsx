@@ -410,9 +410,9 @@ export function Room() {
 
   const peerList = Array.from(peers.values());
   // Vote-to-kick needs a real group — it's disabled (controls hidden, like a
-  // private room) below 3 votable people. Votable = humans only: everyone
-  // except music casters (isMusic), plus ourself (+1).
-  const votableCount = peerList.filter((p) => !p.isMusic).length + 1;
+  // private room) below 3 votable people. Votable = humans only: everyone except
+  // media-source tiles (music casters and extra-mic streams), plus ourself (+1).
+  const votableCount = peerList.filter((p) => !p.isMusic && !p.isMicStream).length + 1;
   const kickEnabled = roomIsPublic && votableCount >= 3;
 
   return (
@@ -502,6 +502,7 @@ export function Room() {
                 isMuted,
                 volume: 1,
                 isMusic: false,
+                isMicStream: false,
                 kickVotes: 0,
                 iVotedKick: false,
                 localMuted: false,

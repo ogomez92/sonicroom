@@ -86,6 +86,9 @@ const joinSchema = z.object({
   // Same as `sharing`, but for an in-progress local-file stream: re-pins SFU on
   // a reconnect so the "file" producer rebuilds. Always false on a first join.
   fileStreaming: z.boolean().optional(),
+  // Same as `sharing`, but for in-progress extra-microphone streams: re-pins SFU
+  // on a reconnect so the "mic" producer(s) rebuild. Always false on a first join.
+  extraMic: z.boolean().optional(),
   // Per-session, per-room random token the client persists (sessionStorage).
   // Identifies an already-admitted session so a reconnect/refresh skips the
   // knock gate, and is what an approval records as "admitted".
@@ -205,6 +208,7 @@ export function createSignalingServer(
       room.casters.size > 0 ||
       room.sharers.size > 0 ||
       room.fileStreamers.size > 0 ||
+      room.extraMicStreamers.size > 0 ||
       room.disableP2p
     );
   }
@@ -336,12 +340,13 @@ export function createSignalingServer(
       void streamManager.stop(room.name).catch(() => {});
     }
 
-    // Drop from the caster/sharer/file-streamer sets before removePeer (which
-    // may destroy the room) so the mode decision no longer forces SFU once this
-    // music caster / audio-sharer / file-streamer is gone.
+    // Drop from the caster/sharer/file-streamer/extra-mic sets before removePeer
+    // (which may destroy the room) so the mode decision no longer forces SFU once
+    // this music caster / audio-sharer / file-streamer / extra-mic peer is gone.
     room.casters.delete(peerId);
     room.sharers.delete(peerId);
     room.fileStreamers.delete(peerId);
+    room.extraMicStreamers.delete(peerId);
     cleanupKickVotes(room, peerId);
 
     removePeer(room, peerId);
@@ -421,6 +426,7 @@ export function createSignalingServer(
           isPublic,
           sharing,
           fileStreaming,
+          extraMic,
           joinToken,
         } = joinSchema.parse(data);
         const room = await getOrCreateRoom(roomName);
@@ -488,6 +494,8 @@ export function createSignalingServer(
         if (sharing) room.sharers.add(socket.id);
         // Likewise for an in-progress local-file stream.
         if (fileStreaming) room.fileStreamers.add(socket.id);
+        // Likewise for in-progress extra-microphone stream(s).
+        if (extraMic) room.extraMicStreamers.add(socket.id);
 
         currentRoom = room;
         currentPeer = peer;
@@ -529,7 +537,8 @@ export function createSignalingServer(
 
         // Send existing peers to the new joiner. Each producer carries its
         // `source` ("voice" | "music") so a late joiner can label/treat the
-        // music caster as a media source without waiting for a new-producer event.
+        // music caster as a media source without waiting for a new-producer event,
+        // plus its `title` (device/file detail) so media tiles read in full at once.
         const existingPeers = Array.from(room.peers.entries())
           .filter(([id]) => id !== socket.id)
           .map(([id, p]) => ({
@@ -539,6 +548,7 @@ export function createSignalingServer(
             producers: Array.from(p.producers.values()).map((prod) => ({
               producerId: prod.id,
               source: (prod.appData?.source as string) ?? "voice",
+              title: (prod.appData?.title as string) || undefined,
             })),
           }));
 
@@ -689,21 +699,26 @@ export function createSignalingServer(
           return;
         }
 
-        const { kind, rtpParameters, source } = z
+        const { kind, rtpParameters, source, title } = z
           .object({
             kind: z.enum(["audio", "video"]) as z.ZodType<MediaKind>,
             rtpParameters: z.any() as z.ZodType<RtpParameters>,
             // "music" for a caster's stereo track, "share" for a peer's stereo
             // system/tab-audio share, "file" for a peer streaming a local audio
-            // file, "voice" (default) for mics.
-            source: z.enum(["voice", "music", "share", "file"]).optional(),
+            // file, "mic" for an EXTRA microphone (a separate producer alongside
+            // the peer's voice), "voice" (default) for the primary mic.
+            source: z.enum(["voice", "music", "share", "file", "mic"]).optional(),
+            // Human-readable detail for a media producer (extra-mic device name,
+            // file name / URL), shown alongside the owner in the participant list.
+            // Trusted only as a display string; capped so a peer can't flood it.
+            title: z.string().trim().max(120).optional(),
           })
           .parse(data);
 
         const producer = await currentPeer.sendTransport.produce({
           kind,
           rtpParameters,
-          appData: { source: source ?? "voice" },
+          appData: { source: source ?? "voice", title: title || undefined },
         });
 
         currentPeer.producers.set(producer.id, producer);
@@ -744,6 +759,7 @@ export function createSignalingServer(
           producerId: producer.id,
           kind: producer.kind,
           source: (producer.appData?.source as string) ?? "voice",
+          title: (producer.appData?.title as string) || undefined,
         });
 
         cb({ ok: true, producerId: producer.id });
@@ -911,6 +927,98 @@ export function createSignalingServer(
         displayName: currentPeer.displayName,
       });
       // No longer pins SFU — fall back to P2P if <=2 peers and nothing else forces it.
+      applyModeDecision(currentRoom);
+      cb?.({ ok: true });
+    });
+
+    // A media producer's display detail changed (a file streamer swapped files —
+    // the producer persists, only its `title` changes). Update appData and re-
+    // broadcast so other peers re-label the tile. Voice never carries a title.
+    socket.on("update-stream-title", (data: unknown, cb?: (res: unknown) => void) => {
+      if (!currentRoom || !currentPeer) return cb?.({ ok: false, error: "Not in a room" });
+      const parsed = z
+        .object({ producerId: z.string(), title: z.string().trim().max(120).optional() })
+        .safeParse(data);
+      if (!parsed.success) return cb?.({ ok: false, error: "Invalid payload" });
+      const { producerId, title } = parsed.data;
+      const producer = currentPeer.producers.get(producerId);
+      const src = producer ? (producer.appData?.source as string) : undefined;
+      // Ownership is implicit (only this peer's producer map); guard the source so
+      // a voice/music producer can never be re-titled.
+      if (!producer || !src || src === "voice" || src === "music") {
+        return cb?.({ ok: false, error: "No such media producer" });
+      }
+      producer.appData.title = title || undefined;
+      socket.to(currentRoom.name).emit("producer-title-updated", {
+        producerId,
+        title: title || undefined,
+      });
+      cb?.({ ok: true });
+    });
+
+    // --- Extra microphone streams (a peer streaming additional input devices,
+    // each as its own "mic" producer alongside their voice). Like a share/file it
+    // pins SFU (a separate producer must be routed by the server) and is auto-
+    // tapped by recording/streaming. Unlike a share (one per peer) a peer can
+    // have several, so the stop is addressed by producerId. The "mic" producer is
+    // excluded from ducking and from mute by the source checks in the produce /
+    // producer-pause handlers — extra mics never duck and aren't muted. ---
+    socket.on("start-extra-mic", (_data: unknown, cb?: (res: unknown) => void) => {
+      if (!currentRoom || !currentPeer) return cb?.({ ok: false, error: "Not in a room" });
+      // Idempotent: a peer streaming several mics is a single set membership, so
+      // announce only on their first one (the per-device tiles arrive separately
+      // via new-producer).
+      const firstForPeer = !currentRoom.extraMicStreamers.has(socket.id);
+      currentRoom.extraMicStreamers.add(socket.id);
+      if (firstForPeer) {
+        socket.to(currentRoom.name).emit("mic-stream-started", {
+          peerId: socket.id,
+          displayName: currentPeer.displayName,
+        });
+      }
+      applyModeDecision(currentRoom);
+      cb?.({ ok: true });
+    });
+
+    socket.on("stop-extra-mic", (data: unknown, cb?: (res: unknown) => void) => {
+      if (!currentRoom || !currentPeer) return cb?.({ ok: false, error: "Not in a room" });
+      // producerId is optional: a client that registered an extra mic but never
+      // reached SFU (so never produced) sends none — we still reconcile the set
+      // below so the SFU pin can't leak.
+      const parsed = z.object({ producerId: z.string().optional() }).safeParse(data);
+      if (!parsed.success) return cb?.({ ok: false, error: "Invalid value" });
+      const { producerId } = parsed.data;
+      if (producerId) {
+        const producer = currentPeer.producers.get(producerId);
+        // Ownership + source guard: only ever close this peer's own "mic" producers.
+        if (!producer || (producer.appData?.source as string) !== "mic") {
+          return cb?.({ ok: false, error: "Unknown mic producer" });
+        }
+        producer.close();
+        currentPeer.producers.delete(producerId);
+        // Stop its capture/feed if recording/streaming — otherwise the recorder/
+        // mixer idles on a dead port until it ends.
+        if (recordingManager.isRecording(currentRoom.name)) {
+          void recordingManager.removeProducer(currentRoom.name, producerId).catch(() => {});
+        }
+        if (streamManager.isStreaming(currentRoom.name)) {
+          void streamManager.removeProducer(currentRoom.name, producerId).catch(() => {});
+        }
+      }
+      // Release the SFU pin only once this peer's LAST mic producer is gone.
+      const hasMoreMics = Array.from(currentPeer.producers.values()).some(
+        (p) => (p.appData?.source as string) === "mic",
+      );
+      if (!hasMoreMics) currentRoom.extraMicStreamers.delete(socket.id);
+      // Only the peers that saw a tile (i.e. a real producer) need it removed.
+      if (producerId) {
+        socket.to(currentRoom.name).emit("mic-stream-stopped", {
+          peerId: socket.id,
+          producerId,
+          displayName: currentPeer.displayName,
+          last: !hasMoreMics,
+        });
+      }
       applyModeDecision(currentRoom);
       cb?.({ ok: true });
     });

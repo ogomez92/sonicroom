@@ -30,3 +30,24 @@ export function microphoneConstraints(
     ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
   };
 }
+
+// Constraints for an EXTRA streamed microphone/input device — a separate "mic"
+// producer alongside the primary voice mic. Two differences from the voice path:
+//   - `exact` device matching, NOT `ideal`. An unavailable/busy extra mic must
+//     fail cleanly rather than silently aliasing to the *default* device (which
+//     `ideal` does) and doubling that capture into the room. The caller only ever
+//     passes a concrete deviceId (the picker excludes the empty "Default" id and
+//     the primary voice mic).
+//   - captured RAW (no echo cancel / noise suppress / auto gain), so instruments
+//     and line-in keep their dynamics — matching the share/file philosophy.
+// `stereo` is the per-device opt-in (default mono); a mono source is unaffected.
+export function extraMicConstraints(deviceId: string, stereo: boolean): MediaTrackConstraints {
+  return {
+    channelCount: stereo ? 2 : 1,
+    ...(isIOS ? {} : { sampleRate: 48000 }),
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    deviceId: { exact: deviceId },
+  };
+}

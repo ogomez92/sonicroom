@@ -71,6 +71,12 @@ export interface Room {
   // voice track AND of any audio share), so the server has to route it — an
   // active file streamer forces SFU just like a caster/sharer does.
   fileStreamers: Set<string>;
+  // Peer ids currently streaming one or more EXTRA microphone/input devices.
+  // Each extra mic is its own *separate* "mic" producer (in addition to the
+  // peer's voice producer), so the server has to route it — an active extra-mic
+  // streamer forces SFU just like a caster/sharer/file-streamer does. A peer is
+  // in this set while it has >=1 live "mic" producer.
+  extraMicStreamers: Set<string>;
   // Watches VOICE producers only (music producers are never added) to drive
   // auto-ducking: when someone talks, listeners lower the music peer's volume.
   audioLevelObserver: AudioLevelObserver;
@@ -139,6 +145,7 @@ export async function getOrCreateRoom(roomName: string): Promise<Room> {
     casters: new Set(),
     sharers: new Set(),
     fileStreamers: new Set(),
+    extraMicStreamers: new Set(),
     audioLevelObserver,
     voiceActive: false,
     observerWired: false,
