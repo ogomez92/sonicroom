@@ -263,22 +263,18 @@ export function useMediasoup() {
   // without the two tearing each other's tiles down.
   const fileOwnersRef = useRef<Map<string, string>>(new Map());
   // Our OUTGOING extra microphones, keyed by deviceId. Each entry owns a live
-  // getUserMedia stream → source → its OWN destination (produced as a separate
-  // "mic" track), plus the producer (null until the SFU is up) and the stereo
-  // choice it was produced with (so a mono↔stereo flip can restart just it).
-  // App-owned like shareDest: kept across reconnects so produceAllExtraMics can
-  // re-produce; torn down only on uncheck or leave.
+  // getUserMedia stream whose RAW track is produced directly as a separate "mic"
+  // track — NO Web Audio round-trip. Unlike share/file (which mix display/element
+  // sources and so need a Web Audio destination), an extra mic gets no processing,
+  // and routing a live external capture through MediaStreamSource→Destination
+  // reclocks it against the AudioContext, drifting a stereo source's two channels
+  // apart over time (the "boop"/image-slides-right bug). Each entry also holds the
+  // producer (null until the SFU is up) and the stereo choice it was produced with
+  // (so a mono↔stereo flip re-acquires + re-produces just it). App-owned: kept
+  // across reconnects so produceAllExtraMics can re-produce; torn down only on
+  // uncheck or leave.
   const extraMicsRef = useRef<
-    Map<
-      string,
-      {
-        stream: MediaStream;
-        source: MediaStreamAudioSourceNode;
-        dest: MediaStreamAudioDestinationNode;
-        producer: Producer | null;
-        stereo: boolean;
-      }
-    >
+    Map<string, { stream: MediaStream; producer: Producer | null; stereo: boolean }>
   >(new Map());
   // Other peers' incoming extra-mic streams: producerId -> owner peerId,
   // mirroring shareOwnersRef/fileOwnersRef.
@@ -302,6 +298,20 @@ export function useMediasoup() {
   const runTransition = useCallback(<T>(fn: () => Promise<T>): Promise<T> => {
     const run = transitionChainRef.current.then(fn);
     transitionChainRef.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }, []);
+
+  // Serialize extra-mic start/stop/restart so a rapid run of toggles (e.g. flip a
+  // device mono→stereo→mono) can't run overlapping captures/produces on the same
+  // device and leave a doubled or wrong-channel producer behind. Mirrors
+  // runTransition; a failed op never wedges the chain.
+  const extraMicChainRef = useRef<Promise<void>>(Promise.resolve());
+  const runExtraMicOp = useCallback(<T>(fn: () => Promise<T>): Promise<T> => {
+    const run = extraMicChainRef.current.then(fn);
+    extraMicChainRef.current = run.then(
       () => undefined,
       () => undefined,
     );
@@ -880,26 +890,22 @@ export function useMediasoup() {
   // and uses `exact` device matching so a busy/unplugged device fails cleanly
   // instead of aliasing to the default and doubling audio. ---
 
-  // (Re)acquire a device's capture and wire it to its own destination. Idempotent
-  // while the capture is live; re-acquires (reusing the destination) if the track
-  // died (e.g. iOS killed it across a reconnect). The destination is app-owned and
-  // reused across reconnects so produce can rebuild without a fresh node.
+  // (Re)acquire a device's RAW capture (no Web Audio nodes — see extraMicsRef).
+  // Idempotent while the capture is live AND already at the requested channel
+  // layout; otherwise re-acquires — the track died (e.g. iOS killed it across a
+  // reconnect), or a mono↔stereo flip needs a fresh capture with the new
+  // channelCount (it can't be changed on a live track).
   const ensureExtraMicGraph = useCallback(async (deviceId: string, stereo: boolean) => {
     resumeSharedContext();
     const existing = extraMicsRef.current.get(deviceId);
     const liveTrack = existing?.stream.getAudioTracks()[0];
-    if (existing && liveTrack && liveTrack.readyState === "live") return existing;
-    if (existing) {
-      existing.source.disconnect();
-      existing.stream.getTracks().forEach((t) => t.stop());
-    }
+    if (existing && existing.stereo === stereo && liveTrack && liveTrack.readyState === "live")
+      return existing;
+    if (existing) existing.stream.getTracks().forEach((t) => t.stop());
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: extraMicConstraints(deviceId, stereo),
     });
-    const source = sharedAudioContext.createMediaStreamSource(stream);
-    const dest = existing?.dest ?? sharedAudioContext.createMediaStreamDestination();
-    source.connect(dest);
-    const entry = { stream, source, dest, producer: existing?.producer ?? null, stereo };
+    const entry = { stream, producer: existing?.producer ?? null, stereo };
     extraMicsRef.current.set(deviceId, entry);
     return entry;
   }, []);
@@ -914,11 +920,14 @@ export function useMediasoup() {
       if (!sendTransport || !device) return;
       const entry = await ensureExtraMicGraph(deviceId, stereo);
       if (entry.producer && !entry.producer.closed) return;
-      const track = entry.dest.stream.getAudioTracks()[0];
+      // Produce the RAW capture track directly (no Web Audio dest) so mediasoup
+      // carries the device's native clock — routing a live stereo capture through
+      // the AudioContext drifts its channels apart over time. The track also
+      // carries the device's human name (e.g. "Virtual Cable 1"), so other peers'
+      // tiles read "Tyler's mic: Virtual Cable 1".
+      const track = entry.stream.getAudioTracks()[0];
       if (!track) return;
-      // The capture track carries the device's human name (e.g. "Virtual Cable
-      // 1"), so other peers' tiles read "Tyler's mic: Virtual Cable 1".
-      const deviceLabel = entry.stream.getAudioTracks()[0]?.label || undefined;
+      const deviceLabel = track.label || undefined;
       entry.producer = await sendTransport.produce({
         track,
         codecOptions: {
@@ -932,8 +941,8 @@ export function useMediasoup() {
           (c) => c.mimeType.toLowerCase() === "audio/opus",
         ),
         appData: { source: "mic", title: deviceLabel },
-        // The destination is app-owned and reused across reconnects — don't let
-        // mediasoup-client stop it when this producer closes (see produceShare).
+        // The raw capture track is app-owned and reused across reconnects — don't
+        // let mediasoup-client stop it when this producer closes (see produceShare).
         stopTracks: false,
       });
     },
@@ -986,7 +995,6 @@ export function useMediasoup() {
       if (!entry) return;
       const producerId = entry.producer?.id;
       if (entry.producer && !entry.producer.closed) entry.producer.close();
-      entry.source.disconnect();
       entry.stream.getTracks().forEach((t) => t.stop());
       extraMicsRef.current.delete(deviceId);
       // Always signal the server: with a producerId it closes that producer; with
@@ -997,6 +1005,39 @@ export function useMediasoup() {
       playCue(sharedAudioContext, "share-stop");
     },
     [emit, store],
+  );
+
+  // Mono↔stereo flip for one device. The producer's codec can't renegotiate live,
+  // so we close + re-produce it — but we produce the NEW one BEFORE retiring the
+  // old server-side producer, so the server always still sees a "mic" producer for
+  // us and never drops us from extraMicStreamers. That keeps the SFU pin held, so
+  // a ≤2-peer room doesn't flap SFU→P2P→SFU (the old stop-then-start path released
+  // and re-took the pin, forcing a full transport rebuild for the whole room).
+  const restartOneExtraMic = useCallback(
+    async (deviceId: string, stereo: boolean) => {
+      const entry = extraMicsRef.current.get(deviceId);
+      if (!entry) return;
+      const oldProducerId = entry.producer?.id;
+      // Stop the old producer's RTP immediately (close the client producer), then
+      // re-acquire with the new channel layout and produce the replacement. The
+      // pin keeps us on the SFU; if we somehow aren't, produceAllExtraMics rebuilds
+      // it on the next setup, so skip the produce rather than racing a switch.
+      if (entry.producer && !entry.producer.closed) entry.producer.close();
+      entry.producer = null;
+      if (modeRef.current === "sfu") {
+        try {
+          await produceOneExtraMic(deviceId, stereo);
+        } catch (err) {
+          console.error("[extra-mic] restart failed:", deviceId, err);
+        }
+      }
+      // Retire the OLD server-side producer now that the new one exists (a client
+      // close doesn't propagate). hasMoreMics stays true server-side, so the pin
+      // is never released and no mode switch fires.
+      if (oldProducerId)
+        await emit("stop-extra-mic", { producerId: oldProducerId }).catch(() => {});
+    },
+    [emit, produceOneExtraMic],
   );
 
   // Baseline of the last reconciled selection (deviceId -> stereo). Diffed against
@@ -1021,17 +1062,19 @@ export function useMediasoup() {
     prevDesiredMicsRef.current = desired;
     // Pre-join: the persisted selection is applied at join, not here. Just track.
     if (!connected) return;
+    // All ops go through runExtraMicOp so a quick flip-and-back can't overlap on
+    // the same device (which left a doubled or wrong-channel producer behind).
     for (const [deviceId] of prev) {
-      if (!desired.has(deviceId)) void stopOneExtraMic(deviceId);
+      if (!desired.has(deviceId)) void runExtraMicOp(() => stopOneExtraMic(deviceId));
     }
     for (const [deviceId, stereo] of desired) {
       const was = prev.get(deviceId);
       if (was === undefined) {
-        void startOneExtraMic(deviceId, stereo);
+        void runExtraMicOp(() => startOneExtraMic(deviceId, stereo));
       } else if (was !== stereo) {
-        // Mono↔stereo flip: close + re-produce just this one (stop deletes the
-        // entry synchronously before its first await, so the start re-creates it).
-        void stopOneExtraMic(deviceId).then(() => startOneExtraMic(deviceId, stereo));
+        // Mono↔stereo flip: re-produce just this one IN PLACE, keeping the SFU pin
+        // (no SFU↔P2P flap — see restartOneExtraMic).
+        void runExtraMicOp(() => restartOneExtraMic(deviceId, stereo));
       }
     }
   }, [
@@ -1041,6 +1084,8 @@ export function useMediasoup() {
     micDeviceId,
     startOneExtraMic,
     stopOneExtraMic,
+    restartOneExtraMic,
+    runExtraMicOp,
   ]);
 
   // Tear down an incoming peer's share "music stream" (they stopped, or left).
@@ -2540,12 +2585,10 @@ export function useMediasoup() {
       g.fileDest?.disconnect();
       outGraphRef.current = null;
     }
-    // Tear down every outgoing extra mic — its destination/source/getUserMedia
-    // stream are app-owned (stopTracks:false producers), so they'd leak the live
-    // captures across rooms otherwise.
+    // Tear down every outgoing extra mic — the raw getUserMedia capture is
+    // app-owned (stopTracks:false producers), so it'd leak across rooms otherwise.
     for (const entry of extraMicsRef.current.values()) {
       if (entry.producer && !entry.producer.closed) entry.producer.close();
-      entry.source.disconnect();
       entry.stream.getTracks().forEach((t) => t.stop());
     }
     extraMicsRef.current.clear();
