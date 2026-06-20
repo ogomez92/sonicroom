@@ -296,6 +296,12 @@ export function Room() {
 
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
+      // Single-letter room shortcuts must not hijack browser/OS combos like
+      // Ctrl+R (reload), Alt+D (address bar) or Cmd+R — bail when any of
+      // Ctrl/Alt/Meta is held. (Shift stays allowed: it's how the uppercase
+      // variants handled below get produced.)
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+
       if (e.key === "m" || e.key === "M") {
         e.preventDefault();
         toggleMute();
