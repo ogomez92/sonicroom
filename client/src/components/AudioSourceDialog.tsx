@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ChevronLeft, FileMusic, Folder, FolderOpen, Link, Music, X } from "lucide-react";
+import { apiUrl } from "../lib/runtime-config";
 import { m } from "../paraglide/messages.js";
 
 interface AudioSourceDialogProps {
@@ -57,7 +58,7 @@ export function AudioSourceDialog({
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void fetch(`/api/audio-library?path=${encodeURIComponent(libPath)}`)
+    void fetch(apiUrl(`/api/audio-library?path=${encodeURIComponent(libPath)}`))
       .then(async (res) => {
         if (!res.ok) throw new Error();
         return (await res.json()) as { entries?: LibraryEntry[] };

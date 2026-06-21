@@ -60,6 +60,7 @@ import {
   mic_stream_name_titled,
 } from "../paraglide/messages.js";
 import { useRoomStore, type RoomMode, type JoinRequest } from "../stores/room";
+import { apiUrl, iceServers, socketTarget } from "../lib/runtime-config";
 
 interface ConsumeResult {
   ok: boolean;
@@ -82,31 +83,9 @@ interface PeerAudio {
   consumer?: Consumer;
 }
 
-// ICE servers — self-hosted coturn at turn.oriolgomez.com (shared with the
-// games on the same VPS). STUN is tried first, so most P2P connections
-// never hit the relay; TURN/TURNS only kick in for symmetric NATs and
-// restrictive corporate/hotel networks. Credentials are visible to
-// clients by design (WebRTC requires them in the browser); coturn's
-// denied-peer-ip rules limit blast radius.
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: "stun:turn.oriolgomez.com:3478" },
-  { urls: "stun:stun.l.google.com:19302" },
-  {
-    urls: "turn:turn.oriolgomez.com:3478?transport=udp",
-    username: "gamesturn",
-    credential: "sin6V0gFokHz78gM0GDfXmat",
-  },
-  {
-    urls: "turn:turn.oriolgomez.com:3478?transport=tcp",
-    username: "gamesturn",
-    credential: "sin6V0gFokHz78gM0GDfXmat",
-  },
-  {
-    urls: "turns:turn.oriolgomez.com:5349?transport=tcp",
-    username: "gamesturn",
-    credential: "sin6V0gFokHz78gM0GDfXmat",
-  },
-];
+// ICE servers (with optional per-instance overrides) live in runtime-config.ts —
+// `iceServers()` returns the default coturn list on the web and whatever the
+// Electron client injects when pointed at another instance.
 
 // Shared AudioContext — single output buffer for all peers (lower latency than
 // one per peer). On iOS we let it adopt the device-native rate instead of pinning
@@ -749,7 +728,7 @@ export function useMediasoup() {
       if (localStream) connectMicToGraph(localStream);
 
       const pc = new RTCPeerConnection({
-        iceServers: ICE_SERVERS,
+        iceServers: iceServers(),
       });
 
       // Send the processed outgoing track (mic gain + limiter, + shared audio),
@@ -1332,7 +1311,7 @@ export function useMediasoup() {
       );
       const sendTransport = device.createSendTransport({
         ...(sendRes.params as Parameters<typeof device.createSendTransport>[0]),
-        iceServers: ICE_SERVERS,
+        iceServers: iceServers(),
       });
 
       sendTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
@@ -1370,7 +1349,7 @@ export function useMediasoup() {
       );
       const recvTransport = device.createRecvTransport({
         ...(recvRes.params as Parameters<typeof device.createRecvTransport>[0]),
-        iceServers: ICE_SERVERS,
+        iceServers: iceServers(),
       });
 
       recvTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
@@ -1505,7 +1484,9 @@ export function useMediasoup() {
         store.getState().setMuted(true);
       }
 
-      const socket = io({ transports: ["websocket"] });
+      // `socketTarget()` is undefined on the web (same-origin, today's behaviour)
+      // and the configured remote instance origin in the Electron client.
+      const socket = io(socketTarget(), { transports: ["websocket"] });
       socketRef.current = socket;
 
       // Per-session, per-room token so a reconnect/refresh is recognized as an
@@ -2597,7 +2578,7 @@ export function useMediasoup() {
       const name = decodeURIComponent(
         url.pathname.split("/").filter(Boolean).pop() ?? url.hostname,
       );
-      await startFileSource(`/api/audio-proxy?url=${encodeURIComponent(url.href)}`, name);
+      await startFileSource(apiUrl(`/api/audio-proxy?url=${encodeURIComponent(url.href)}`), name);
     },
     [startFileSource],
   );
@@ -2607,7 +2588,10 @@ export function useMediasoup() {
     // basename while streaming.
     async (relPath: string) => {
       const name = relPath.split("/").pop() || relPath;
-      await startFileSource(`/api/audio-library/file?path=${encodeURIComponent(relPath)}`, name);
+      await startFileSource(
+        apiUrl(`/api/audio-library/file?path=${encodeURIComponent(relPath)}`),
+        name,
+      );
     },
     [startFileSource],
   );

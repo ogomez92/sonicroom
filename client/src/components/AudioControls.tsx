@@ -16,6 +16,7 @@ import {
   Megaphone,
 } from "lucide-react";
 import { useRoomStore } from "../stores/room";
+import { apiUrl } from "../lib/runtime-config";
 import { DeviceSettings } from "./DeviceSettings";
 import { StreamSettings } from "./StreamSettings";
 import { m } from "../paraglide/messages.js";
@@ -287,7 +288,7 @@ export function AudioControls({
         {recordingId && (
           <a
             {...item("download")}
-            href={`/api/recordings/${encodeURIComponent(recordingId)}/download`}
+            href={apiUrl(`/api/recordings/${encodeURIComponent(recordingId)}/download`)}
             download={`sonicroom-${recordingId}.ogg`}
             className="flex h-11 items-center gap-2 rounded-full bg-sonic-700 px-4 text-sonic-200 transition-all hover:bg-sonic-600"
             aria-label={m.controls_download_recording()}
@@ -301,7 +302,7 @@ export function AudioControls({
         {recordingId && (
           <a
             {...item("download-tracks")}
-            href={`/api/recordings/${encodeURIComponent(recordingId)}/tracks`}
+            href={apiUrl(`/api/recordings/${encodeURIComponent(recordingId)}/tracks`)}
             download={`sonicroom-${recordingId}-tracks.zip`}
             className="flex h-11 items-center gap-2 rounded-full bg-sonic-700 px-4 text-sonic-200 transition-all hover:bg-sonic-600"
             aria-label={m.controls_download_tracks_recording()}

@@ -5,7 +5,8 @@ import { MicPreview } from "./MicPreview";
 import { LanguageSelect } from "./LanguageSelect";
 import { Footer } from "./Footer";
 import { getLocale } from "../lib/i18n";
-import { getInstanceName } from "../lib/branding";
+import { getInstanceName, getDefaultDisplayName } from "../lib/branding";
+import { apiUrl } from "../lib/runtime-config";
 import { m } from "../paraglide/messages.js";
 
 function sanitize(input: string): string {
@@ -47,7 +48,7 @@ export function Lobby() {
   const [searchParams] = useSearchParams();
   const prefillRoom = searchParams.get("room") || "";
   const [roomName, setRoomName] = useState(sanitize(prefillRoom));
-  const [displayName, setDisplayName] = useState("");
+  const [displayName, setDisplayName] = useState(getDefaultDisplayName);
   const [disableP2p, setDisableP2p] = useState(() => isP2pDisabled(searchParams.get("p2p")));
   const [makePublic, setMakePublic] = useState(() => isPublicEnabled(searchParams.get("public")));
   const [joinWithoutMic, setJoinWithoutMic] = useState(() =>
@@ -87,7 +88,7 @@ export function Lobby() {
     let active = true;
     const fetchRooms = async () => {
       try {
-        const res = await fetch("/api/public-rooms");
+        const res = await fetch(apiUrl("/api/public-rooms"));
         if (!res.ok) return;
         const data = (await res.json()) as { rooms?: PublicRoom[] };
         if (active && Array.isArray(data.rooms)) setPublicRooms(data.rooms);

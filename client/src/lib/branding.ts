@@ -6,8 +6,24 @@
 // default in dev (Vite serves the raw HTML, so the global is absent) or if unset.
 export const DEFAULT_INSTANCE_NAME = "SonicRoom";
 
-interface SonicRoomConfig {
+export interface SonicRoomConfig {
   instanceName?: string;
+  // Set only by the Electron thin client (the web build leaves these undefined,
+  // so behaviour is unchanged): the remote SonicRoom instance to connect to and
+  // optional ICE/TURN overrides. See `runtime-config.ts` for how they retarget
+  // the socket.io connection, the REST (`/api`) calls and the WebRTC ICE config.
+  serverUrl?: string;
+  iceServers?: RTCIceServer[];
+  // Prefilled name in the lobby's "Your name" field (Electron settings default).
+  defaultDisplayName?: string;
+}
+
+// The display name to prefill in the lobby. Empty on the web (the field starts
+// blank); the Electron client can seed it from its settings.
+export function getDefaultDisplayName(): string {
+  const name =
+    typeof window !== "undefined" ? window.__SONICROOM_CONFIG__?.defaultDisplayName?.trim() : "";
+  return name || "";
 }
 
 declare global {
