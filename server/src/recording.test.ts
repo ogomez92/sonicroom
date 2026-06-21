@@ -354,6 +354,72 @@ describe("RecordingManager.getTrackFiles / tracksByRecordingId", () => {
   });
 });
 
+describe("RecordingManager.getPaddedTracks / spawnPaddedTrack", () => {
+  let h: Harness;
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  it("carries each track's start offset and a shared total span", async () => {
+    h.clock.t = 1000; // recording starts at t=1000
+    await h.manager.start("room1", h.router, [
+      { producerId: "p1", peerId: "alice", label: "Alice" },
+    ]);
+    h.clock.t = 6000; // a late joiner, 5s in
+    await h.manager.addProducer("room1", { producerId: "p2", peerId: "bob", label: "Bob" });
+
+    h.clock.t = 11000; // downloading 10s into a still-running recording
+    const tracks = h.manager.getPaddedTracks("room1");
+    assert.equal(tracks.length, 2);
+    // delay = offset from the recording start; total = full span so far (now)
+    assert.deepEqual(
+      tracks.map((t) => [t.delayMs, t.totalMs]),
+      [
+        [0, 10000],
+        [5000, 10000],
+      ],
+    );
+  });
+
+  it("freezes the total span to the finish time once stopped", async () => {
+    h.clock.t = 1000;
+    await h.manager.start("room1", h.router, [{ producerId: "p1", peerId: "alice" }]);
+    h.clock.t = 30000;
+    await h.manager.finalize("room1"); // stopped 29s in
+    h.clock.t = 999999; // long after — must not grow the span
+    const tracks = h.manager.getPaddedTracks("room1");
+    assert.equal(tracks[0].totalMs, 29000);
+  });
+
+  it("skips header-only/missing captures like the raw track list", async () => {
+    const rec = await h.manager.start("room1", h.router, PRODUCERS);
+    h.headerOnlyFiles.add(`${rec.dir}/bob__p2.ogg`);
+    const tracks = h.manager.getPaddedTracks("room1");
+    assert.equal(tracks.length, 1);
+    assert.ok(tracks[0].path.includes("alice__p1"));
+  });
+
+  it("resolves by recording id, and spawns a padding ffmpeg per track", async () => {
+    h.clock.t = 1000;
+    const rec = await h.manager.start("room1", h.router, [{ producerId: "p1", peerId: "alice" }]);
+    h.clock.t = 4000;
+    await h.manager.addProducer("room1", { producerId: "p2", peerId: "bob" });
+    h.clock.t = 9000;
+
+    const tracks = h.manager.paddedTracksByRecordingId(rec.id);
+    assert.ok(tracks && tracks.length === 2);
+    assert.equal(h.manager.paddedTracksByRecordingId("nope"), null);
+
+    const spawnedBefore = h.spawned.length;
+    h.manager.spawnPaddedTrack(tracks[1]); // bob, 3s offset, 8s span
+    assert.equal(h.spawned.length, spawnedBefore + 1);
+    const proc = h.spawned[h.spawned.length - 1];
+    assert.ok(proc.args.includes("libopus"));
+    assert.ok(proc.args[proc.args.indexOf("-af") + 1].includes("adelay=3000:all=1"));
+    assert.equal(proc.args[proc.args.indexOf("-t") + 1], "8.000");
+  });
+});
+
 describe("RecordingManager.mix", () => {
   let h: Harness;
   beforeEach(() => {

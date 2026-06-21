@@ -180,6 +180,57 @@ export function buildMixArgs(inputs: MixInput[]): string[] {
   return args;
 }
 
+export interface PadInput {
+  path: string;
+  // ms of leading silence to prepend — this track's offset from the recording
+  // start, so a late joiner lines up at t=0 when dropped into a DAW.
+  delayMs: number;
+  // target length of the output in ms — the full recording span (start →
+  // stop/now) — so every track in the per-track zip comes out the same length.
+  totalMs: number;
+}
+
+// Re-encode one captured Ogg/Opus track into a time-aligned, fixed-length
+// Ogg/Opus stream on stdout (pipe:1): <delayMs> of leading silence, then the
+// audio (internal gaps from mid-recording mutes filled with silence), then
+// trailing silence — padded/truncated to exactly <totalMs>. So every track in
+// the per-track download shares the same start boundary AND the same length:
+// unzip them, drop them at the project start in Reaper, and they're aligned.
+//
+// adelay/apad are filters, so this MUST re-encode (libopus) — `-c:a copy` is
+// impossible with a filtergraph, exactly like the delayed mix above. The
+// bitrate is a generous default that's transparent for voice and good for
+// music (the captures themselves cap at the router's 256k ceiling).
+export function buildPadArgs(input: PadInput): string[] {
+  const delay = Math.max(0, Math.round(input.delayMs));
+  // ffmpeg -t takes seconds; keep ms precision so lengths match exactly.
+  const totalSec = (Math.max(0, input.totalMs) / 1000).toFixed(3);
+  // aresample first fills timestamp gaps (a track muted mid-recording) with
+  // silence; adelay then shifts the whole thing; apad runs the tail to infinity
+  // and -t caps the output at the shared total length.
+  const filters = ["aresample=async=1"];
+  if (delay > 0) filters.push(`adelay=${delay}:all=1`);
+  filters.push("apad");
+  return [
+    "-hide_banner",
+    "-loglevel",
+    "warning",
+    "-i",
+    input.path,
+    "-af",
+    filters.join(","),
+    "-t",
+    totalSec,
+    "-c:a",
+    "libopus",
+    "-b:a",
+    "192k",
+    "-f",
+    "ogg",
+    "pipe:1",
+  ];
+}
+
 // --- Mode decision --------------------------------------------------------
 export interface ModeDecision {
   mode: RoomMode;

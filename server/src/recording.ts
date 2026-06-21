@@ -11,6 +11,7 @@ import {
   sdpParamsFromRtp,
   buildCaptureArgs,
   buildMixArgs,
+  buildPadArgs,
   computeDelayMs,
   trackFileName,
   type MixInput,
@@ -125,12 +126,26 @@ export interface TrackFile {
   name: string;
 }
 
+// A per-track download entry expanded with the timing needed to pad it to the
+// full recording span: leading silence equal to its start offset, and a shared
+// total length so every track comes out the same size and aligned (see
+// buildPadArgs).
+export interface PaddedTrack extends TrackFile {
+  delayMs: number;
+  totalMs: number;
+}
+
 export type RecordingStatus = "recording" | "finished";
 
 export interface RoomRecording {
   id: string;
   dir: string;
   startedAt: number;
+  // When the recording was finalized (stopped). Unset while still recording.
+  // Used to fix the total span when padding the per-track download, so the
+  // tracks of a finished recording all share the same length regardless of
+  // when the zip is downloaded.
+  finishedAt?: number;
   router: RecordingRouter;
   recorders: Map<string, ProducerRecorder>;
   // Recorders whose producer went away mid-recording (peer left, stopped
@@ -319,6 +334,41 @@ export class RecordingManager {
     return null;
   }
 
+  // Like getTrackFiles(), but each entry also carries the timing to pad it to
+  // the full recording span — leading silence equal to its start offset, and a
+  // shared total length (recording start → finish, or → now while still
+  // recording) — so the per-track zip unpacks to equal-length, time-aligned
+  // files that drop straight into a DAW. Same MIN_CAPTURE_BYTES filtering.
+  getPaddedTracks(roomName: string): PaddedTrack[] {
+    const rec = this.recordings.get(roomName);
+    if (!rec) return [];
+    const totalMs = Math.max(0, (rec.finishedAt ?? this.deps.now()) - rec.startedAt);
+    return this.allRecorders(rec)
+      .map((r, i) => ({
+        path: r.filePath,
+        name: trackFileName(r, i),
+        delayMs: computeDelayMs(rec.startedAt, r.startedAt),
+        totalMs,
+      }))
+      .filter((t) => this.deps.fileSize(t.path) >= MIN_CAPTURE_BYTES);
+  }
+
+  // Same as getPaddedTracks(), addressed by the recording id the download URL
+  // carries. Works for active and finished recordings.
+  paddedTracksByRecordingId(recordingId: string): PaddedTrack[] | null {
+    for (const [roomName, rec] of this.recordings) {
+      if (rec.id === recordingId) return this.getPaddedTracks(roomName);
+    }
+    return null;
+  }
+
+  // Spawn a one-shot ffmpeg that streams one padded, time-aligned track to its
+  // stdout (Ogg/Opus). Used per entry by the per-track zip download; the source
+  // capture file is read but never modified, so live captures are unaffected.
+  spawnPaddedTrack(track: PaddedTrack): SpawnedProcess {
+    return this.deps.spawn(this.deps.ffmpegPath, buildPadArgs(track));
+  }
+
   // Spawn a one-shot ffmpeg that mixes the current capture files into a single
   // Ogg/Opus stream on stdout. Capture processes (if still running) are never
   // interrupted. Files that don't exist yet, are empty, or hold only an Opus
@@ -353,6 +403,7 @@ export class RecordingManager {
     if (!rec || rec.status !== "recording") return null;
 
     rec.status = "finished";
+    rec.finishedAt = this.deps.now();
     for (const recorder of rec.recorders.values()) {
       this.stopRecorder(recorder);
     }

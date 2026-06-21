@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer } from "node:http";
-import { createReadStream, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -9,7 +9,7 @@ import type { Worker } from "mediasoup/types";
 import { workerSettings, numWorkers } from "./mediasoup-config.js";
 import { setWorkers, getPublicRooms } from "./room-manager.js";
 import { createSignalingServer } from "./signaling.js";
-import { RecordingManager } from "./recording.js";
+import { RecordingManager, type SpawnedProcess } from "./recording.js";
 import { StreamManager } from "./streaming.js";
 import { createZipStream } from "./zip-stream.js";
 import {
@@ -261,11 +261,15 @@ async function main() {
   });
 
   // Per-track download — packs each participant's captured audio into its own
-  // file inside one streamed .zip (no mixing). Includes tracks whose peer
-  // already left, since their captures are kept on disk. Like the mix above,
-  // works while still recording and never interrupts the live captures.
+  // file inside one streamed .zip (no mixing). Each track is padded to the full
+  // recording span: leading silence equal to its start offset + trailing
+  // silence to a shared length, so the unzipped files are all the same length
+  // and aligned on the same time boundaries (drop them straight into a DAW).
+  // Includes tracks whose peer already left, since their captures are kept on
+  // disk. Like the mix above, works while still recording and never interrupts
+  // the live captures (the padding ffmpeg only reads each capture file).
   app.get("/api/recordings/:id/tracks", (req, res) => {
-    const tracks = recordingManager.tracksByRecordingId(req.params.id);
+    const tracks = recordingManager.paddedTracksByRecordingId(req.params.id);
     if (!tracks || tracks.length === 0) {
       res.status(404).json({ error: "No recording with that id, or nothing captured yet" });
       return;
@@ -276,15 +280,41 @@ async function main() {
       `attachment; filename="sonicroom-${req.params.id}-tracks.zip"`,
     );
 
+    // The zip streams entries one at a time, so at most one padding ffmpeg runs
+    // at once. Track them so we can kill the in-flight one if the client aborts.
+    const procs: SpawnedProcess[] = [];
+    const killProcs = () => {
+      for (const p of procs) {
+        try {
+          p.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+
     const zip = createZipStream(
-      tracks.map((t) => ({ name: t.name, open: () => createReadStream(t.path) })),
+      tracks.map((t) => ({
+        name: t.name,
+        open: () => {
+          const proc = recordingManager.spawnPaddedTrack(t);
+          procs.push(proc);
+          proc.stderr?.on("data", (d: Buffer) => console.error(`[tracks] ${d.toString().trim()}`));
+          if (!proc.stdout) throw new Error(`ffmpeg produced no stdout for track ${t.name}`);
+          return proc.stdout;
+        },
+      })),
     );
     zip.on("error", (err) => {
       console.error(`[tracks] zip error: ${String(err)}`);
+      killProcs();
       res.destroy(err instanceof Error ? err : new Error(String(err)));
     });
-    // If the client aborts the download, stop reading the files.
-    res.on("close", () => zip.destroy());
+    // If the client aborts the download, stop the zip and the live ffmpeg.
+    res.on("close", () => {
+      zip.destroy();
+      killProcs();
+    });
     zip.pipe(res);
   });
 

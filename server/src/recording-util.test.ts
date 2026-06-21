@@ -7,6 +7,7 @@ import {
   sdpParamsFromRtp,
   buildCaptureArgs,
   buildMixArgs,
+  buildPadArgs,
   decideMode,
   computeDelayMs,
   trackFileName,
@@ -180,6 +181,33 @@ describe("buildMixArgs", () => {
 
   it("throws when there are no inputs", () => {
     assert.throws(() => buildMixArgs([]));
+  });
+});
+
+describe("buildPadArgs", () => {
+  it("pads a delayed track with leading silence and a fixed total length", () => {
+    const args = buildPadArgs({ path: "/tmp/a.ogg", delayMs: 5000, totalMs: 600000 });
+    const af = args[args.indexOf("-af") + 1];
+    // gaps filled, then shifted by the offset, then padded out to the end
+    assert.equal(af, "aresample=async=1,adelay=5000:all=1,apad");
+    // -t caps the (now infinite, via apad) output at the full span, in seconds
+    assert.equal(args[args.indexOf("-t") + 1], "600.000");
+    // a filter forces a re-encode (cannot -c:a copy) and an Ogg stream to stdout
+    assert.ok(args.includes("libopus"));
+    assert.deepEqual(args.slice(-2), ["ogg", "pipe:1"]);
+  });
+
+  it("omits adelay for a zero-offset track but still pads to total length", () => {
+    const args = buildPadArgs({ path: "/tmp/a.ogg", delayMs: 0, totalMs: 12500 });
+    const af = args[args.indexOf("-af") + 1];
+    assert.equal(af, "aresample=async=1,apad");
+    assert.equal(args[args.indexOf("-t") + 1], "12.500");
+  });
+
+  it("rounds the delay and clamps a negative total to zero", () => {
+    const args = buildPadArgs({ path: "/tmp/a.ogg", delayMs: 1499.6, totalMs: -100 });
+    assert.ok(args[args.indexOf("-af") + 1].includes("adelay=1500:all=1"));
+    assert.equal(args[args.indexOf("-t") + 1], "0.000");
   });
 });
 
