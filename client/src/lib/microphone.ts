@@ -42,12 +42,13 @@ export function microphoneConstraints(
 //     and line-in keep their dynamics — matching the share/file philosophy.
 //   - NO sample-rate hint (not even off-iOS, unlike the voice path). Forcing 48 kHz
 //     on a clockless virtual device (e.g. a virtual audio cable carrying music)
-//     makes Chrome insert a capture-side resampler that, with AEC off, reconciles
-//     the two stereo channels on slightly independent timelines — they drift apart
-//     over time (image walks right + periodic "boop"). Letting the device capture
-//     at its native rate lets the WebRTC/Opus encoder do the one resample to 48 kHz
-//     coherently across both channels. A real device with its own clock is
-//     unaffected either way.
+//     makes Chrome insert a capture-side resampler; letting the device capture at
+//     its native rate avoids it. (This is now belt-and-suspenders: the real
+//     stereo-drift fix is that the extra mic is reclocked through a Web Audio
+//     destination before produce — see `extraMicsRef` in useMediasoup.ts — which
+//     keeps the two channels frame-locked regardless of the capture rate. The
+//     earlier "drop the hint" change chased a different artifact and didn't fix the
+//     drift; the raw-produce path did.)
 // `stereo` is the per-device opt-in (default mono); a mono source is unaffected.
 export function extraMicConstraints(deviceId: string, stereo: boolean): MediaTrackConstraints {
   return {
