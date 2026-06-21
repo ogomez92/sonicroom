@@ -1,0 +1,25 @@
+{
+  "name": "electron_client",
+  "private": true,
+  "version": "0.1.0",
+  "description": "SonicRoom desktop client — a cross-platform Electron thin client that connects to a configurable SonicRoom instance.",
+  "author": "Oriol Gomez <ogomez.s92@gmail.com>",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "build:main": "node build.mjs",
+    "build:client": "pnpm --filter client build",
+    "typecheck": "tsc --noEmit",
+    "start": "node build.mjs && electron .",
+    "dev": "node build.mjs && cross-env SONICROOM_DEV=1 electron .",
+    "dist": "node build.mjs && electron-builder",
+    "dist:dir": "node build.mjs && electron-builder --dir"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "cross-env": "^7.0.3",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.3"
+  }
+}

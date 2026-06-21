@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SonicRoom — Settings</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        background: #09090b;
+        color: #e4e4e7;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      .wrap {
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px 22px 28px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+      }
+      p.sub {
+        margin: 0 0 18px;
+        color: #a1a1aa;
+        font-size: 13px;
+      }
+      fieldset {
+        border: 1px solid #27272a;
+        border-radius: 12px;
+        padding: 14px 16px 16px;
+        margin: 0 0 16px;
+      }
+      legend {
+        padding: 0 6px;
+        font-weight: 600;
+        color: #fafafa;
+      }
+      label.field {
+        display: block;
+        margin: 12px 0 0;
+      }
+      label.field:first-of-type {
+        margin-top: 0;
+      }
+      .field > span {
+        display: block;
+        margin-bottom: 4px;
+        color: #d4d4d8;
+      }
+      .hint {
+        color: #71717a;
+        font-size: 12px;
+        margin-top: 2px;
+      }
+      input[type="text"],
+      input[type="url"],
+      input[type="number"],
+      input[type="password"],
+      select,
+      textarea {
+        width: 100%;
+        padding: 8px 10px;
+        background: #18181b;
+        border: 1px solid #3f3f46;
+        border-radius: 8px;
+        color: #fafafa;
+        font: inherit;
+      }
+      textarea {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        min-height: 130px;
+        resize: vertical;
+      }
+      input:focus,
+      select:focus,
+      textarea:focus {
+        outline: 2px solid #6366f1;
+        outline-offset: 0;
+        border-color: #6366f1;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+      }
+      .row > label.field {
+        flex: 1;
+        margin-top: 12px;
+      }
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .check input {
+        width: 16px;
+        height: 16px;
+      }
+      .check span {
+        margin: 0;
+      }
+      .actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-top: 22px;
+      }
+      .actions .right {
+        display: flex;
+        gap: 10px;
+      }
+      button {
+        font: inherit;
+        font-weight: 600;
+        padding: 9px 16px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #6366f1;
+        color: #fff;
+      }
+      button.primary:hover {
+        background: #4f46e5;
+      }
+      button.ghost {
+        background: #27272a;
+        color: #e4e4e7;
+      }
+      button.ghost:hover {
+        background: #3f3f46;
+      }
+      button.link {
+        background: none;
+        border: none;
+        color: #a5b4fc;
+        padding: 0;
+        font-weight: 500;
+      }
+      button.link:hover {
+        text-decoration: underline;
+      }
+      #status {
+        min-height: 18px;
+        font-size: 13px;
+        margin-top: 10px;
+      }
+      #status.error {
+        color: #fca5a5;
+      }
+      #status.ok {
+        color: #86efac;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Settings</h1>
+      <p class="sub">Configure the SonicRoom instance to connect to and your audio preferences.</p>
+
+      <form id="form">
+        <fieldset>
+          <legend>Connection</legend>
+          <label class="field">
+            <span>Server URL</span>
+            <input
+              id="serverUrl"
+              type="url"
+              placeholder="https://sonicroom.example.com"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <div class="hint">The remote SonicRoom instance (origin) this client connects to.</div>
+          </label>
+          <label class="field">
+            <span>Instance name</span>
+            <input id="instanceName" type="text" placeholder="SonicRoom" autocomplete="off" />
+            <div class="hint">Optional branding shown in the app title and lobby.</div>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>ICE / TURN servers</legend>
+          <label class="field">
+            <span>Servers (JSON array of RTCIceServer)</span>
+            <textarea id="iceServers" spellcheck="false"></textarea>
+            <div class="hint">
+              STUN/TURN used for WebRTC. Leave as the default unless your instance uses its own
+              TURN.
+              <button type="button" class="link" id="resetIce">Reset to defaults</button>
+            </div>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Audio &amp; voice</legend>
+          <label class="field">
+            <span>Default display name</span>
+            <input id="displayName" type="text" placeholder="Your name" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Language</span>
+            <select id="language">
+              <option value="">Auto-detect</option>
+              <option value="en">English</option>
+              <option value="es">Español</option>
+              <option value="fr">Français</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Microphone gain (0–4, 1 = unity)</span>
+            <input id="micGain" type="number" min="0" max="4" step="0.05" />
+          </label>
+          <label class="field">
+            <span>Chat announcements</span>
+            <select id="announceMode">
+              <option value="polite">Polite (default)</option>
+              <option value="assertive">Assertive</option>
+              <option value="tts">Text-to-speech</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <label class="check">
+            <input id="hifiVoice" type="checkbox" />
+            <span>Hi-fi stereo voice (~128 kbps; default mono ~64 kbps)</span>
+          </label>
+          <label class="check">
+            <input id="voiceProcessing" type="checkbox" />
+            <span>Voice processing (echo cancellation / noise suppression / auto-gain)</span>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Icecast streaming target</legend>
+          <div class="hint" style="margin-bottom: 4px">
+            Where the in-call “Stream to Icecast” feature publishes. The password is stored locally.
+          </div>
+          <div class="row">
+            <label class="field"
+              ><span>Host</span><input id="ic_host" type="text" placeholder="stream.example.com"
+            /></label>
+            <label class="field" style="max-width: 120px"
+              ><span>Port</span><input id="ic_port" type="number" min="1" max="65535"
+            /></label>
+          </div>
+          <label class="field"
+            ><span>Mount</span><input id="ic_mount" type="text" placeholder="/sonicroom"
+          /></label>
+          <div class="row">
+            <label class="field"
+              ><span>Username</span><input id="ic_username" type="text" placeholder="source"
+            /></label>
+            <label class="field"
+              ><span>Password</span><input id="ic_password" type="password"
+            /></label>
+          </div>
+          <div class="row">
+            <label class="field"
+              ><span>Format</span
+              ><select id="ic_format">
+                <option value="mp3">MP3</option>
+                <option value="opus">Opus</option>
+              </select></label
+            >
+            <label class="field"
+              ><span>Bitrate (kbps)</span><input id="ic_bitrate" type="number" min="32" max="320"
+            /></label>
+          </div>
+        </fieldset>
+
+        <div id="status" role="status" aria-live="polite"></div>
+
+        <div class="actions">
+          <button type="button" class="link" id="cancel">Cancel</button>
+          <div class="right">
+            <button type="submit" class="primary">Save &amp; reload</button>
+          </div>
+        </div>
+      </form>
+    </div>
+    <script src="./settings.js"></script>
+  </body>
+</html>

@@ -7,6 +7,10 @@ dist/
 build/
 *.tsbuildinfo
 
+# Electron client build/packaging output
+electron_client/dist-electron/
+electron_client/release/
+
 # Logs
 logs/
 *.log

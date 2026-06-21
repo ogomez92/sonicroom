@@ -1,6 +1,7 @@
 packages:
   - "client"
   - "server"
+  - "electron_client"
 
 # pnpm 11.4+ gates native build scripts behind an explicit allow-list and
 # exits 1 (ERR_PNPM_IGNORED_BUILDS) on any install/run until each is decided.
@@ -10,7 +11,12 @@ packages:
 allowBuilds:
   esbuild: true
   mediasoup: true
+  # Electron's postinstall downloads the platform binary for the desktop client.
+  electron: true
+  # Only needed for Squirrel.Windows targets; we build NSIS, so skip its build.
+  electron-winstaller: false
 
 onlyBuiltDependencies:
   - esbuild
   - mediasoup
+  - electron

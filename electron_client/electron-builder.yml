@@ -1,0 +1,42 @@
+appId: com.oriolgomez.sonicroom
+productName: SonicRoom
+# An icon at build/icon.png (or build/icon.icns / build/icon.ico) is picked up
+# automatically from buildResources; without one, Electron's default is used.
+directories:
+  output: release
+  buildResources: build
+# What goes inside the app (asar). The built web client is shipped separately as
+# an extra (unpacked) resource and served by the main process over app://.
+files:
+  - dist-electron/**/*
+  - package.json
+extraResources:
+  - from: ../client/dist
+    to: client-dist
+    filter:
+      - "**/*"
+asar: true
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.social-networking
+  # Mic + screen-recording usage strings (required for the corresponding macOS
+  # permission prompts to appear).
+  extendInfo:
+    NSMicrophoneUsageDescription: SonicRoom uses your microphone for voice chat.
+    NSCameraUsageDescription: SonicRoom may use your camera for screen sharing.
+    NSScreenCaptureUsageDescription: SonicRoom captures your screen/system audio when you share audio.
+linux:
+  target:
+    - AppImage
+    - deb
+  category: AudioVideo
+  synopsis: Low-latency voice + hi-fi music conferencing client

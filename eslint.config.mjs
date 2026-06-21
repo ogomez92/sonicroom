@@ -11,6 +11,9 @@ export default defineConfig(
     "server/dist/",
     // Generated Paraglide output — regenerated on every dev/build.
     "client/src/paraglide/",
+    // Electron bundle output (esbuild).
+    "electron_client/dist-electron/",
+    "electron_client/release/",
     "node_modules/",
   ]),
 
@@ -37,6 +40,13 @@ export default defineConfig(
   {
     files: ["server/src/**/*.ts"],
     languageOptions: { globals: globals.node },
+  },
+
+  // Electron desktop client: main process + preloads are Node/Electron; the
+  // settings renderer is browser code. Allow both global sets.
+  {
+    files: ["electron_client/src/**/*.ts", "electron_client/build.mjs"],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 
   {
