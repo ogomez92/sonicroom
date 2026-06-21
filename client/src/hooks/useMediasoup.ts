@@ -215,6 +215,26 @@ function destroyAudioPipeline(pa: PeerAudio) {
   pa.analyser.disconnect();
 }
 
+// Apply the LOCAL user's hi-fi / low-latency Opus prefs to a REMOTE P2P
+// description before setRemoteDescription. Crucial RFC 7587 subtlety: the
+// `stereo` / `maxaveragebitrate` fmtp params describe the RECEIVE capability of
+// whoever SENT that SDP, so the description we apply as *remote* is what gates
+// OUR OWN encoder. Munging it by our local hi-fi flag is therefore what actually
+// makes our mic SEND stereo 128k — independent of the remote peer's setting,
+// exactly like the speaker-controlled SFU `opusStereo` produce flag.
+//
+// forceOpusParams on the LOCAL description (in createOffer/createAnswer) only
+// sets *our* receive prefs, which gate the OTHER peer's encoder — so on its own
+// it made hi-fi voice silently RECEIVER-gated in P2P (you sent stereo only if
+// your listener had also enabled hi-fi). That's why a hi-fi speaker stayed mono
+// until something (an extra mic, a share, recording…) forced the room onto the
+// SFU, where the produce flag is speaker-controlled. Munging the remote desc too
+// makes P2P match: hi-fi is the SPEAKER's choice in both transports.
+function withHifiOpus(desc: RTCSessionDescriptionInit): RTCSessionDescriptionInit {
+  if (!desc.sdp) return desc;
+  return { ...desc, sdp: forceOpusParams(desc.sdp, useRoomStore.getState().hifiVoiceEnabled) };
+}
+
 export function useMediasoup() {
   const socketRef = useRef<Socket | null>(null);
   const deviceRef = useRef<Device | null>(null);
@@ -1902,8 +1922,10 @@ export function useMediasoup() {
               // We received an offer — create connection as answerer
               const pc = await createP2pConnection(fromPeerId, false);
               if (!pc) return;
+              // Munge the remote OFFER by our hi-fi flag so OUR encoder sends
+              // stereo per our own choice (see withHifiOpus).
               await pc.setRemoteDescription(
-                new RTCSessionDescription(payload as RTCSessionDescriptionInit),
+                new RTCSessionDescription(withHifiOpus(payload as RTCSessionDescriptionInit)),
               );
               await flushPendingCandidates(fromPeerId, pc);
               const answer = await pc.createAnswer();
@@ -1918,8 +1940,10 @@ export function useMediasoup() {
           } else if (type === "answer") {
             const pc = p2pConnectionsRef.current.get(fromPeerId);
             if (pc) {
+              // Same as the offer path: munge the remote ANSWER so our encoder
+              // sends stereo per OUR hi-fi flag (see withHifiOpus).
               await pc.setRemoteDescription(
-                new RTCSessionDescription(payload as RTCSessionDescriptionInit),
+                new RTCSessionDescription(withHifiOpus(payload as RTCSessionDescriptionInit)),
               );
               await flushPendingCandidates(fromPeerId, pc);
             }
