@@ -118,12 +118,13 @@ export function Room() {
   }, []);
 
   // When the knock-to-join modal closes (everyone decided), drop focus back into
-  // the call by opening chat and focusing its composer (bumping the signal also
-  // re-focuses it if the panel was already open behind the modal).
+  // the call WITHOUT opening the chat panel. If chat is already open behind the
+  // modal, bump the signal to re-focus its composer; otherwise park focus on the
+  // toggle so it never falls onto <body>.
   const onJoinRequestsCleared = useCallback(() => {
-    setChatOpen(true);
-    setChatFocusSignal((n) => n + 1);
-  }, []);
+    if (chatOpen) setChatFocusSignal((n) => n + 1);
+    else chatToggleRef.current?.focus();
+  }, [chatOpen]);
 
   // Hidden local-file picker used by the audio-source chooser. Choosing a file
   // starts — or, mid-stream, replaces — the stream. The floating player handles
