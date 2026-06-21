@@ -84,6 +84,8 @@
   "controls_download_tracks": "Pistes",
   "controls_leave_room": "Quitter le salon",
   "controls_leave": "Quitter",
+  "controls_speakers": "Qui parle",
+  "controls_speakers_title": "Annonce qui parle maintenant ou a parlé récemment (W)",
 
   "chat_panel_label": "Chat",
   "chat_heading": "Chat",
@@ -256,6 +258,8 @@
   "announce_kick_vote_withdrawn": "{voter} a retiré son vote pour exclure {target}",
   "announce_peer_kicked": "{name} a été exclu du salon par un vote",
   "announce_you_were_kicked": "Vous avez été exclu du salon par un vote",
+  "announce_speakers_none": "Personne n'a parlé récemment",
+  "announce_speakers_list": "Ont parlé récemment : {names}",
   "announce_music_started": "{name} a commencé à diffuser de la musique",
   "announce_music_stopped": "{name} a arrêté de diffuser de la musique",
   "announce_chat_hint": "Appuyez sur Alt plus un chiffre de 1 à 0 pour entendre les dix derniers messages, même lorsque le panneau de discussion est fermé. Appuyez de nouveau sur le même chiffre pour copier ce message."

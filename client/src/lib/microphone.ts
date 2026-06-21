@@ -32,7 +32,7 @@ export function microphoneConstraints(
 }
 
 // Constraints for an EXTRA streamed microphone/input device — a separate "mic"
-// producer alongside the primary voice mic. Two differences from the voice path:
+// producer alongside the primary voice mic. Three differences from the voice path:
 //   - `exact` device matching, NOT `ideal`. An unavailable/busy extra mic must
 //     fail cleanly rather than silently aliasing to the *default* device (which
 //     `ideal` does) and doubling that capture into the room. The caller only ever
@@ -40,11 +40,18 @@ export function microphoneConstraints(
 //     the primary voice mic).
 //   - captured RAW (no echo cancel / noise suppress / auto gain), so instruments
 //     and line-in keep their dynamics — matching the share/file philosophy.
+//   - NO sample-rate hint (not even off-iOS, unlike the voice path). Forcing 48 kHz
+//     on a clockless virtual device (e.g. a virtual audio cable carrying music)
+//     makes Chrome insert a capture-side resampler that, with AEC off, reconciles
+//     the two stereo channels on slightly independent timelines — they drift apart
+//     over time (image walks right + periodic "boop"). Letting the device capture
+//     at its native rate lets the WebRTC/Opus encoder do the one resample to 48 kHz
+//     coherently across both channels. A real device with its own clock is
+//     unaffected either way.
 // `stereo` is the per-device opt-in (default mono); a mono source is unaffected.
 export function extraMicConstraints(deviceId: string, stereo: boolean): MediaTrackConstraints {
   return {
     channelCount: stereo ? 2 : 1,
-    ...(isIOS ? {} : { sampleRate: 48000 }),
     echoCancellation: false,
     noiseSuppression: false,
     autoGainControl: false,

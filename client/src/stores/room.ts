@@ -299,6 +299,11 @@ interface RoomState {
   // Peers
   peers: Map<string, PeerState>;
 
+  // Transient "who's talking" highlight: peerId → rank (1-based) for the most
+  // recent talkers. Set by the W shortcut / toolbar button and auto-cleared
+  // after a couple of seconds; drives the numbered badges in ParticipantList.
+  speakerBadges: Record<string, number>;
+
   // Chat messages in arrival order (newest last). Seeded with room history on
   // join, then appended as `chat-message` events arrive (including our own).
   messages: ChatMessage[];
@@ -343,6 +348,9 @@ interface RoomState {
   addPeer: (peerId: string, displayName: string) => void;
   removePeer: (peerId: string) => void;
   setPeerSpeaking: (peerId: string, speaking: boolean) => void;
+  // Replace the transient recent-talkers badge map (set on the W readout, then
+  // cleared to {} after a couple of seconds).
+  setSpeakerBadges: (badges: Record<string, number>) => void;
   setPeerMuted: (peerId: string, muted: boolean) => void;
   setPeerVolume: (peerId: string, volume: number) => void;
   // Toggle our local (listener-side) mute of one peer/stream. Pure client state.
@@ -397,6 +405,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   roomIsPublic: false,
   kicked: false,
   peers: new Map(),
+  speakerBadges: {},
   messages: [],
 
   setLanguage: (locale) => {
@@ -560,16 +569,28 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     set((state) => {
       const peers = new Map(state.peers);
       peers.delete(peerId);
+      // Drop a departed peer from the transient talkers highlight so a stale
+      // badge can't linger (the tile is gone anyway).
+      if (peerId in state.speakerBadges) {
+        const speakerBadges = { ...state.speakerBadges };
+        delete speakerBadges[peerId];
+        return { peers, speakerBadges };
+      }
       return { peers };
     }),
 
   setPeerSpeaking: (peerId, speaking) =>
     set((state) => {
+      const peer = state.peers.get(peerId);
+      // No-op if unchanged: the detection loop only calls on transitions, but
+      // guard anyway so a redundant call never forces a re-render.
+      if (!peer || peer.isSpeaking === speaking) return state;
       const peers = new Map(state.peers);
-      const peer = peers.get(peerId);
-      if (peer) peers.set(peerId, { ...peer, isSpeaking: speaking });
+      peers.set(peerId, { ...peer, isSpeaking: speaking });
       return { peers };
     }),
+
+  setSpeakerBadges: (speakerBadges) => set({ speakerBadges }),
 
   setPeerMuted: (peerId, muted) =>
     set((state) => {
@@ -664,6 +685,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       roomIsPublic: false,
       kicked: false,
       peers: new Map(),
+      speakerBadges: {},
       messages: [],
     }),
 }));

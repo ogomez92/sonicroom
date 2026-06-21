@@ -13,6 +13,7 @@ import {
   AudioLines,
   Radio,
   Settings,
+  Megaphone,
 } from "lucide-react";
 import { useRoomStore } from "../stores/room";
 import { DeviceSettings } from "./DeviceSettings";
@@ -30,6 +31,8 @@ interface AudioControlsProps {
   onToggleRecording: () => void;
   onStartStreaming: () => Promise<void>;
   onStopStreaming: () => Promise<void>;
+  // Announce + briefly number the people talking now / who talked recently.
+  onAnnounceSpeakers: () => void;
   onLeave: () => void;
 }
 
@@ -41,6 +44,7 @@ export function AudioControls({
   onToggleRecording,
   onStartStreaming,
   onStopStreaming,
+  onAnnounceSpeakers,
   onLeave,
 }: AudioControlsProps) {
   const isMuted = useRoomStore((s) => s.isMuted);
@@ -102,6 +106,7 @@ export function AudioControls({
     "record",
     ...(recordingId ? ["download", "download-tracks"] : []),
     "stream",
+    "speakers",
     "settings",
     "leave",
   ];
@@ -328,6 +333,19 @@ export function AudioControls({
           title={isStreaming ? m.room_streaming_title() : m.streaming_start_title()}
         >
           <Radio className={`h-5 w-5 ${isStreaming ? "animate-pulse" : ""}`} />
+        </button>
+
+        {/* Announce (and briefly number on their tiles) who's talking now or
+            talked recently — a momentary readout, not a toggle. Same action as
+            the W shortcut. */}
+        <button
+          {...item("speakers")}
+          onClick={onAnnounceSpeakers}
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-sonic-700 text-sonic-200 transition-all hover:bg-sonic-600"
+          aria-label={m.controls_speakers()}
+          title={m.controls_speakers_title()}
+        >
+          <Megaphone className="h-5 w-5" />
         </button>
 
         <button

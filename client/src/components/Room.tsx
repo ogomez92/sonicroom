@@ -91,6 +91,7 @@ export function Room() {
     sendChatMessage,
     decideJoinRequest,
     voteKick,
+    announceSpeakers,
   } = useMediasoup();
 
   const [joinState, setJoinState] = useState<JoinState>("idle");
@@ -150,6 +151,8 @@ export function Room() {
   const localPeerId = useRoomStore((s) => s.localPeerId);
   const displayName = useRoomStore((s) => s.displayName);
   const peers = useRoomStore((s) => s.peers);
+  // Transient numbered badges on the most recent talkers (W shortcut / button).
+  const speakerBadges = useRoomStore((s) => s.speakerBadges);
   const isMuted = useRoomStore((s) => s.isMuted);
   const hasMic = useRoomStore((s) => s.hasMic);
   const micGain = useRoomStore((s) => s.micGain);
@@ -319,6 +322,10 @@ export function Room() {
       } else if (e.key === "r" || e.key === "R") {
         e.preventDefault();
         toggleRecording();
+      } else if (e.key === "w" || e.key === "W") {
+        // Announce + briefly number the people talking now / who talked recently.
+        e.preventDefault();
+        announceSpeakers();
       }
     };
 
@@ -326,7 +333,7 @@ export function Room() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [joinState, toggleMute, toggleAudioShare, toggleDucking, toggleRecording]);
+  }, [joinState, toggleMute, toggleAudioShare, toggleDucking, toggleRecording, announceSpeakers]);
 
   const handleLeave = useCallback(() => {
     postToHost("readyToClose");
@@ -516,6 +523,7 @@ export function Room() {
               kickEnabled={kickEnabled}
               onToggleKick={(id) => voteKick(id, !peers.get(id)?.iVotedKick)}
               announce={announce}
+              speakerBadges={speakerBadges}
             />
           )}
         </main>
@@ -537,6 +545,7 @@ export function Room() {
           onToggleRecording={toggleRecording}
           onStartStreaming={startStreaming}
           onStopStreaming={stopStreaming}
+          onAnnounceSpeakers={announceSpeakers}
           onLeave={handleLeave}
         />
         <PoweredBy />

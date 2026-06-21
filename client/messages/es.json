@@ -84,6 +84,8 @@
   "controls_download_tracks": "Pistas",
   "controls_leave_room": "Salir de la sala",
   "controls_leave": "Salir",
+  "controls_speakers": "Quién habla",
+  "controls_speakers_title": "Anuncia quién habla ahora o ha hablado hace poco (W)",
 
   "chat_panel_label": "Chat",
   "chat_heading": "Chat",
@@ -256,6 +258,8 @@
   "announce_kick_vote_withdrawn": "{voter} retiró su voto para expulsar a {target}",
   "announce_peer_kicked": "{name} fue expulsado de la sala por votación",
   "announce_you_were_kicked": "Has sido expulsado de la sala por votación",
+  "announce_speakers_none": "Nadie ha hablado hace poco",
+  "announce_speakers_list": "Han hablado: {names}",
   "announce_music_started": "{name} empezó a emitir música",
   "announce_music_stopped": "{name} dejó de emitir música",
   "announce_chat_hint": "Pulsa Alt más un número del 1 al 0 para oír los últimos diez mensajes, incluso con el panel de chat cerrado. Pulsa el mismo número otra vez para copiar ese mensaje."

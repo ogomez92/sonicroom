@@ -84,6 +84,8 @@
   "controls_download_tracks": "Tracks",
   "controls_leave_room": "Leave room",
   "controls_leave": "Leave",
+  "controls_speakers": "Who's talking",
+  "controls_speakers_title": "Announce who's talking now or talked recently (W)",
 
   "chat_panel_label": "Chat",
   "chat_heading": "Chat",
@@ -256,6 +258,8 @@
   "announce_kick_vote_withdrawn": "{voter} withdrew their vote to kick {target}",
   "announce_peer_kicked": "{name} was removed from the room by vote",
   "announce_you_were_kicked": "You were removed from the room by vote",
+  "announce_speakers_none": "No one has talked recently",
+  "announce_speakers_list": "Recent speakers: {names}",
   "announce_music_started": "{name} started casting music",
   "announce_music_stopped": "{name} stopped casting music",
   "announce_chat_hint": "Press Alt plus a number from 1 to 0 to hear the last ten messages, even while the chat panel is closed. Press the same number again to copy that message."

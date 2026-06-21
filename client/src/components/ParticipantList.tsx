@@ -30,6 +30,9 @@ interface ParticipantListProps {
   onToggleKick: (peerId: string) => void;
   // Transient, listener-only announcements (per CLAUDE.md: NOT announceEvent).
   announce: (message: string) => void;
+  // peerId → rank (1-based) for the most recent talkers, shown as a transient
+  // numbered badge on the tile (set by the W shortcut / button, auto-cleared).
+  speakerBadges: Record<string, number>;
 }
 
 function getInitials(name: string): string {
@@ -64,6 +67,7 @@ export function ParticipantList({
   kickEnabled,
   onToggleKick,
   announce,
+  speakerBadges,
 }: ParticipantListProps) {
   const rows = useMemo(() => [selfPeer, ...peerList], [selfPeer, peerList]);
   const isSelf = (peerId: string) => peerId === selfPeer.peerId;
@@ -204,6 +208,8 @@ export function ParticipantList({
         const textOnly = self && !hasMic;
         const flaggedForKick =
           kickEnabled && !peer.isMusic && !peer.isMicStream && !self && peer.kickVotes > 0;
+        // Transient recent-talker rank (1, 2, 3) from the W readout, if any.
+        const speakerRank = speakerBadges[peer.peerId];
         return (
           <li
             key={peer.peerId}
@@ -227,7 +233,7 @@ export function ParticipantList({
             {/* Avatar */}
             <div
               aria-hidden="true"
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+              className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                 peer.isMusic || peer.isMicStream
                   ? "border-2 border-sonic-accent bg-sonic-accent/20 text-sonic-accent"
                   : peer.isSpeaking
@@ -241,6 +247,13 @@ export function ParticipantList({
                 <Mic className="h-4 w-4" />
               ) : (
                 getInitials(peer.displayName)
+              )}
+              {/* Recent-talker rank badge — visual only; the SR path is the
+                  spoken readout (announce_speakers_list). */}
+              {speakerRank != null && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-sonic-accent text-[10px] font-bold text-white ring-2 ring-sonic-800">
+                  {speakerRank}
+                </span>
               )}
             </div>
 
