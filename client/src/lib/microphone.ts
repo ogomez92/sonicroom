@@ -43,12 +43,11 @@ export function microphoneConstraints(
 //   - NO sample-rate hint (not even off-iOS, unlike the voice path). Forcing 48 kHz
 //     on a clockless virtual device (e.g. a virtual audio cable carrying music)
 //     makes Chrome insert a capture-side resampler; letting the device capture at
-//     its native rate avoids it. (This is now belt-and-suspenders: the real
-//     stereo-drift fix is that the extra mic is reclocked through a Web Audio
-//     destination before produce — see `extraMicsRef` in useMediasoup.ts — which
-//     keeps the two channels frame-locked regardless of the capture rate. The
-//     earlier "drop the hint" change chased a different artifact and didn't fix the
-//     drift; the raw-produce path did.)
+//     its native rate avoids it. (Kept as a low-risk default. The extra mic is also
+//     reclocked through a Web Audio destination before produce — see `extraMicsRef`
+//     in useMediasoup.ts — which is the path that proved stable against the stereo
+//     drift; the exact cause was never pinned down, so neither change is claimed as
+//     the definitive fix.)
 // `stereo` is the per-device opt-in (default mono); a mono source is unaffected.
 export function extraMicConstraints(deviceId: string, stereo: boolean): MediaTrackConstraints {
   return {

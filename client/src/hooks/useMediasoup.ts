@@ -328,18 +328,16 @@ export function useMediasoup() {
   // Our OUTGOING extra microphones, keyed by deviceId. Each entry owns a live
   // getUserMedia capture and routes it through Web Audio (source → dest) exactly
   // like share/file and the primary voice mic — we produce the DESTINATION's track,
-  // not the raw capture track. This is the drift fix: a MediaStreamAudioDestination
-  // emits frame-locked interleaved stereo at the AudioContext clock, so the two
-  // channels can never slide apart. Producing the raw track instead lets WebRTC
-  // reconcile a virtual/clockless device's drifting clock against the Opus encoder
-  // itself (with AEC off there's no APM drift-compensator), which walks the stereo
-  // image right over time + emits a periodic "boop" on each buffer resync. (The old
-  // raw-produce path had the theory backwards — every other stereo producer here
-  // goes through a dest and is stable; the raw extra mic was the lone drifter.) The
-  // entry also holds the producer (null until the SFU is up) and the stereo choice
-  // it was produced with (so a mono↔stereo flip re-acquires + re-produces just it).
-  // App-owned: kept across reconnects so produceAllExtraMics can re-produce; torn
-  // down only on uncheck or leave.
+  // not the raw capture track. An earlier variant produced the raw capture track
+  // directly and a stereo extra mic could drift its two channels apart over time
+  // (image slides right + a periodic "boop"); routing through a dest — which every
+  // other stereo producer here already does — was stable in testing. We never
+  // pinned down the exact mechanism (it looked browser-specific), so treat the
+  // dest route as the empirically-stable path, not a proven fix for a known cause.
+  // The entry also holds the producer (null until the SFU is up) and the stereo
+  // choice it was produced with (so a mono↔stereo flip re-acquires + re-produces
+  // just it). App-owned: kept across reconnects so produceAllExtraMics can
+  // re-produce; torn down only on uncheck or leave.
   const extraMicsRef = useRef<
     Map<
       string,
@@ -1067,10 +1065,10 @@ export function useMediasoup() {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: extraMicConstraints(deviceId, stereo),
     });
-    // Reclock through the shared context: the dest emits frame-locked interleaved
-    // stereo at the context clock, so the channels can't drift apart (the bug a raw
-    // produce causes). `dest.channelCount` matches the produced layout so a mono
-    // pick stays mono rather than up-mixing to dual-mono.
+    // Reclock through the shared context (source → dest) and produce the dest's
+    // track, like share/file — the raw-produce variant could drift a stereo extra
+    // mic's channels apart (see extraMicsRef). `dest.channelCount` matches the
+    // produced layout so a mono pick stays mono rather than up-mixing to dual-mono.
     const source = ctx.createMediaStreamSource(stream);
     const dest = ctx.createMediaStreamDestination();
     dest.channelCount = stereo ? 2 : 1;
@@ -1090,11 +1088,11 @@ export function useMediasoup() {
       if (!sendTransport || !device) return;
       const entry = await ensureExtraMicGraph(deviceId, stereo);
       if (entry.producer && !entry.producer.closed) return;
-      // Produce the Web Audio DESTINATION track (frame-locked stereo at the context
-      // clock — see ensureExtraMicGraph/extraMicsRef), NOT the raw capture, so the
-      // channels can't drift apart. The dest track has no label, so the device's
-      // human name (e.g. "Virtual Cable 1") comes off the RAW capture track — other
-      // peers' tiles still read "Tyler's mic: Virtual Cable 1".
+      // Produce the Web Audio DESTINATION track (see ensureExtraMicGraph/
+      // extraMicsRef for why we route through a dest rather than producing the raw
+      // capture). The dest track has no label, so the device's human name (e.g.
+      // "Virtual Cable 1") comes off the RAW capture track — other peers' tiles
+      // still read "Tyler's mic: Virtual Cable 1".
       const track = entry.dest.stream.getAudioTracks()[0];
       if (!track) return;
       const deviceLabel = entry.stream.getAudioTracks()[0]?.label || undefined;
