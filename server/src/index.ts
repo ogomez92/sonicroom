@@ -66,28 +66,10 @@ async function main() {
 
   const recordingManager = new RecordingManager();
   const streamManager = new StreamManager();
-  const { postChatMessage } = createSignalingServer(httpServer, recordingManager, streamManager);
+  createSignalingServer(httpServer, recordingManager, streamManager);
   // Health check
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", workers: workers.length });
-  });
-
-  // Post a chat message into a live room from outside the browser (e.g. Ecobox
-  // announcing the now-playing track). Body: { text, sender? }. Rate-limited
-  // and validated identically to an in-room peer; 404 if the room isn't live.
-  app.post("/api/rooms/:roomName/messages", (req, res) => {
-    const body = (req.body ?? {}) as { text?: unknown; sender?: unknown };
-    if (typeof body.text !== "string") {
-      res.status(400).json({ error: "Body must include a string `text`" });
-      return;
-    }
-    const sender = typeof body.sender === "string" ? body.sender : "System";
-    const result = postChatMessage(req.params.roomName, sender, body.text);
-    if (!result.ok) {
-      res.status(result.status).json({ error: result.error });
-      return;
-    }
-    res.status(201).json({ ok: true, message: result.message });
   });
 
   // Public room directory for the lobby: the live, publicly-listed rooms and who

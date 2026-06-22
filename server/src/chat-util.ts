@@ -1,6 +1,6 @@
-// Pure, side-effect-free chat helpers shared by the socket and HTTP paths.
-// Kept here (mirroring recording-util.ts) so the spam logic is unit-testable
-// without sockets or timers — callers always pass `now`.
+// Pure, side-effect-free chat helpers for the socket path. Kept here (mirroring
+// recording-util.ts) so the spam logic is unit-testable without sockets or
+// timers — callers always pass `now`.
 
 export const CHAT_RATE_LIMIT = 5; // messages...
 export const CHAT_RATE_WINDOW_MS = 10_000; // ...per this window
@@ -17,11 +17,10 @@ export interface ChatMessage {
   ts: number;
 }
 
-// Sliding-window rate limiter keyed by an arbitrary string (a socket id, or
-// `api:<room>` for HTTP posts). Blocked attempts deliberately do NOT count
-// against the window — once 10s pass since the 5 accepted sends, the sender is
-// free again. Deterministic: the caller passes `now`, so it's testable without
-// real time.
+// Sliding-window rate limiter keyed by an arbitrary string (a socket id).
+// Blocked attempts deliberately do NOT count against the window — once 10s pass
+// since the 5 accepted sends, the sender is free again. Deterministic: the
+// caller passes `now`, so it's testable without real time.
 export class RateLimiter {
   private hits = new Map<string, number[]>();
 

@@ -143,9 +143,9 @@ export function createSignalingServer(
     if (room) applyModeDecision(room);
   };
 
-  // Anti-spam: 5 messages / 10s per sender. Keyed by socket id for in-room
-  // chat, and by `api:<room>` for HTTP posts. Blocked sends are dropped (the
-  // client keeps the unsent text and plays a "thunk"), never queued.
+  // Anti-spam: 5 messages / 10s per sender, keyed by socket id. Blocked sends
+  // are dropped (the client keeps the unsent text and plays a "thunk"), never
+  // queued.
   const chatLimiter = new RateLimiter();
 
   // Anti-spam for vote-to-kick: at most 5 vote *changes* / 10s per voter, so a
@@ -165,36 +165,6 @@ export function createSignalingServer(
     }
     io.to(room.name).emit("chat-message", msg);
     return msg;
-  }
-
-  // HTTP entrypoint (see the POST /api/rooms/:room/messages route): post a
-  // message into a live room from outside the socket world (e.g. Ecobox
-  // announcing the now-playing track). Same validation + rate limit as a peer.
-  function postChatMessage(
-    roomName: string,
-    sender: string,
-    rawText: string,
-  ): { ok: true; message: ChatMessage } | { ok: false; error: string; status: number } {
-    const room = getRooms().get(roomName);
-    if (!room) return { ok: false, error: "Room not found or empty", status: 404 };
-
-    const parsed = chatTextSchema.safeParse(rawText);
-    if (!parsed.success) {
-      return {
-        ok: false,
-        error: parsed.error.issues[0]?.message ?? "Invalid message",
-        status: 400,
-      };
-    }
-    const cleanSender =
-      sender
-        .replace(/[<>"'&]/g, "")
-        .trim()
-        .slice(0, 256) || "System";
-    if (!chatLimiter.tryConsume(`api:${roomName}`, Date.now())) {
-      return { ok: false, error: "Rate limited", status: 429 };
-    }
-    return { ok: true, message: deliverChatMessage(room, cleanSender, parsed.data) };
   }
 
   // The room must be pinned to the SFU when the server has to see/route the
@@ -1288,5 +1258,5 @@ export function createSignalingServer(
     });
   });
 
-  return { io, postChatMessage };
+  return { io };
 }
