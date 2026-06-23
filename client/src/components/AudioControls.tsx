@@ -223,7 +223,6 @@ export function AudioControls({
               : "bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
           }`}
           aria-label={isSharingAudio ? m.controls_stop_share() : m.controls_share()}
-          aria-pressed={isSharingAudio}
           title={isSharingAudio ? m.controls_stop_share_title() : m.controls_share_title()}
         >
           {isSharingAudio ? (
@@ -242,7 +241,6 @@ export function AudioControls({
               : "bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
           }`}
           aria-label={isStreamingFile ? m.controls_stop_file() : m.controls_stream_file()}
-          aria-pressed={isStreamingFile}
           title={isStreamingFile ? m.controls_stop_file_title() : m.controls_stream_file_title()}
         >
           <FileMusic className="h-5 w-5" />
@@ -260,7 +258,6 @@ export function AudioControls({
               : "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30"
           }`}
           aria-label={duckingEnabled ? m.controls_ducking_disable() : m.controls_ducking_enable()}
-          aria-pressed={duckingEnabled}
           title={duckingEnabled ? m.controls_ducking_on_title() : m.controls_ducking_off_title()}
         >
           <AudioLines className="h-5 w-5" />
@@ -275,7 +272,6 @@ export function AudioControls({
               : "bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
           }`}
           aria-label={isRecording ? m.controls_stop_recording() : m.controls_record()}
-          aria-pressed={isRecording}
           title={isRecording ? m.controls_stop_recording_title() : m.controls_record_title()}
         >
           {isRecording ? (
