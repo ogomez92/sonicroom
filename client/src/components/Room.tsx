@@ -88,6 +88,7 @@ export function Room() {
     setPeerVolume,
     setPeerLocalMute,
     setMicGain,
+    setStreamMonitorVolume,
     sendChatMessage,
     decideJoinRequest,
     voteKick,
@@ -162,6 +163,7 @@ export function Room() {
   const isStreaming = useRoomStore((s) => s.isStreaming);
   const fileStreamName = useRoomStore((s) => s.fileStreamName);
   const fileStreamPlaying = useRoomStore((s) => s.fileStreamPlaying);
+  const streamMonitorVolume = useRoomStore((s) => s.streamMonitorVolume);
   const messages = useRoomStore((s) => s.messages);
   const announcement = useRoomStore((s) => s.announcement);
   const announceSeq = useRoomStore((s) => s.announceSeq);
@@ -602,6 +604,8 @@ export function Room() {
           playing={fileStreamPlaying}
           onTogglePlay={toggleFilePlayback}
           onStop={() => stopFileStream()}
+          volume={streamMonitorVolume}
+          onVolumeChange={setStreamMonitorVolume}
         />
       )}
     </div>

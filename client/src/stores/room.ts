@@ -22,6 +22,23 @@ function loadMicGain(): number {
   return 1;
 }
 
+// The streamer's LOCAL monitor volume for the file/URL/library stream (0–1
+// gain). Only changes how loud the stream is for the person playing it — the
+// track produced to everyone else is always at full level. Persisted (a comfort
+// preference) and defaulting to 0.5 so a fresh stream doesn't blast at full
+// volume from the streamer's own speakers.
+const STREAM_MONITOR_VOLUME_KEY = "sonicroom:streamMonitorVolume";
+
+function loadStreamMonitorVolume(): number {
+  try {
+    const v = parseFloat(localStorage.getItem(STREAM_MONITOR_VOLUME_KEY) ?? "");
+    if (Number.isFinite(v)) return Math.min(1, Math.max(0, v));
+  } catch {
+    // localStorage unavailable (e.g. private mode) — fall back to the default.
+  }
+  return 0.5;
+}
+
 // Selected audio devices ("" = browser default). Per-device preferences like
 // micGain: persisted, and carried from the lobby preview into the call.
 const MIC_DEVICE_KEY = "sonicroom:micDeviceId";
@@ -227,6 +244,11 @@ interface RoomState {
   // toolbar button. The actual <audio> element lives in the media hook.
   fileStreamName: string | null;
   fileStreamPlaying: boolean;
+  // The streamer's LOCAL monitor volume for the file/URL/library stream (0–1).
+  // Only changes how loud it is for them; the track others hear stays full
+  // level. Persisted across streams and reloads (default 0.5). The actual gain
+  // node lives in the media hook.
+  streamMonitorVolume: number;
   // Outgoing (send-side) mic gain applied before the track reaches peers/SFU,
   // 0–MAX_MIC_GAIN. 1 = unity (raw mic). Lets a quiet/cheap mic be boosted for
   // everyone, independent of each listener's per-peer playback volume.
@@ -322,6 +344,7 @@ interface RoomState {
   setSharingAudio: (sharing: boolean) => void;
   setFileStream: (name: string | null) => void;
   setFileStreamPlaying: (playing: boolean) => void;
+  setStreamMonitorVolume: (volume: number) => void;
   setMicGain: (gain: number) => void;
   setMicDeviceId: (deviceId: string) => void;
   setSpeakerDeviceId: (deviceId: string) => void;
@@ -382,6 +405,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   isSharingAudio: false,
   fileStreamName: null,
   fileStreamPlaying: false,
+  streamMonitorVolume: loadStreamMonitorVolume(),
   micGain: loadMicGain(),
   micDeviceId: loadString(MIC_DEVICE_KEY),
   speakerDeviceId: loadString(SPEAKER_DEVICE_KEY),
@@ -427,6 +451,14 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   setSharingAudio: (isSharingAudio) => set({ isSharingAudio }),
   setFileStream: (fileStreamName) => set({ fileStreamName }),
   setFileStreamPlaying: (fileStreamPlaying) => set({ fileStreamPlaying }),
+  setStreamMonitorVolume: (streamMonitorVolume) => {
+    try {
+      localStorage.setItem(STREAM_MONITOR_VOLUME_KEY, String(streamMonitorVolume));
+    } catch {
+      // Persistence is best-effort; keep the in-memory value regardless.
+    }
+    set({ streamMonitorVolume });
+  },
   setMicGain: (micGain) => {
     try {
       localStorage.setItem(MIC_GAIN_KEY, String(micGain));

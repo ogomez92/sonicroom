@@ -180,6 +180,7 @@
   "file_player_stop": "Stop streaming file",
   "file_player_streaming": "Streaming {name}",
   "file_player_hint": "Space to play or pause, Escape to stop streaming",
+  "file_player_volume_label": "Your volume (only changes what you hear, not what others hear)",
   "audio_source_heading": "Stream audio",
   "audio_source_computer": "Choose from computer",
   "audio_source_url_label": "Audio URL",

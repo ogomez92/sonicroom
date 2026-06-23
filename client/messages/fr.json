@@ -180,6 +180,7 @@
   "file_player_stop": "Arrêter la diffusion du fichier",
   "file_player_streaming": "Diffusion de {name}",
   "file_player_hint": "Espace pour lire ou mettre en pause, Échap pour arrêter la diffusion",
+  "file_player_volume_label": "Votre volume (ne change que ce que vous entendez, pas les autres)",
   "audio_source_heading": "Diffuser de l'audio",
   "audio_source_computer": "Choisir sur l'ordinateur",
   "audio_source_url_label": "URL audio",

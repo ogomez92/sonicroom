@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
-import { Play, Pause, X, FileMusic } from "lucide-react";
+import { Play, Pause, X, FileMusic, Volume2 } from "lucide-react";
 import { m } from "../paraglide/messages.js";
 
 interface FileStreamPlayerProps {
@@ -8,13 +8,25 @@ interface FileStreamPlayerProps {
   playing: boolean;
   onTogglePlay: () => void;
   onStop: () => void;
+  // The streamer's LOCAL monitor volume (0–1) and its setter. Only affects how
+  // loud the stream is for THEM — the track others hear is always full level.
+  volume: number;
+  onVolumeChange: (volume: number) => void;
 }
 
 // Floating mini-window for the local-file stream: shows the file name, a
 // play/pause toggle (autofocused when the window appears, so Space toggles it
-// straight away) and a stop button. Escape anywhere inside stops the stream and
-// closes the window. Independent of the audio share and the music caster.
-export function FileStreamPlayer({ name, playing, onTogglePlay, onStop }: FileStreamPlayerProps) {
+// straight away), a local volume slider and a stop button. Escape anywhere
+// inside stops the stream and closes the window. Independent of the audio share
+// and the music caster.
+export function FileStreamPlayer({
+  name,
+  playing,
+  onTogglePlay,
+  onStop,
+  volume,
+  onVolumeChange,
+}: FileStreamPlayerProps) {
   const playRef = useRef<HTMLButtonElement>(null);
 
   // Autofocus the play/pause control the moment the window opens (i.e. as soon
@@ -68,6 +80,24 @@ export function FileStreamPlayer({ name, playing, onTogglePlay, onStop }: FileSt
         <p id="file-player-hint" className="text-xs text-sonic-400">
           {m.file_player_hint()}
         </p>
+      </div>
+
+      {/* Local monitor volume — only changes how loud the stream is for YOU; the
+          track everyone else hears stays at full level. Persisted, so the next
+          stream starts at the same volume. */}
+      <div className="mt-3 flex items-center gap-2">
+        <Volume2 className="h-4 w-4 shrink-0 text-sonic-400" aria-hidden="true" />
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={Math.round(volume * 100)}
+          onChange={(e) => onVolumeChange(parseInt(e.target.value, 10) / 100)}
+          className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-sonic-600 accent-sonic-accent"
+          aria-label={m.file_player_volume_label()}
+          aria-valuetext={`${Math.round(volume * 100)}%`}
+        />
       </div>
     </div>
   );

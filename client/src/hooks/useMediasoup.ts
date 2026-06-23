@@ -283,6 +283,11 @@ export function useMediasoup() {
     // destination or its producer.
     fileSource: MediaElementAudioSourceNode | null;
     fileDest: MediaStreamAudioDestinationNode | null;
+    // Local-only monitor gain for the file stream: the <audio> source feeds the
+    // speakers THROUGH this node (source → fileMonitorGain → destination), so the
+    // streamer can set how loud the stream is FOR THEM without touching fileDest
+    // (the full-level track everyone else hears). Persists across file swaps.
+    fileMonitorGain: GainNode | null;
     micStream: MediaStream | null;
   } | null>(null);
   // Audio share (system / tab audio produced as its own stereo "share" track)
@@ -600,6 +605,7 @@ export function useMediasoup() {
       shareDest: null,
       fileSource: null,
       fileDest: null,
+      fileMonitorGain: null,
       micStream: null,
     };
     return outGraphRef.current;
@@ -2452,9 +2458,11 @@ export function useMediasoup() {
       const g = outGraphRef.current;
       g?.fileSource?.disconnect();
       g?.fileDest?.disconnect();
+      g?.fileMonitorGain?.disconnect();
       if (g) {
         g.fileSource = null;
         g.fileDest = null;
+        g.fileMonitorGain = null;
       }
       if (fileAudioRef.current) {
         fileAudioRef.current.pause();
@@ -2510,11 +2518,21 @@ export function useMediasoup() {
 
       const source = sharedAudioContext.createMediaElementSource(audioEl);
       g.fileSource = source;
-      // Its OWN destination → produced as a separate stereo "file" track.
+      // Its OWN destination → produced as a separate stereo "file" track. This
+      // is the full-level track everyone else hears — the monitor gain below
+      // never touches it.
       if (!g.fileDest) g.fileDest = sharedAudioContext.createMediaStreamDestination();
       source.connect(g.fileDest);
-      // Also monitor it locally, so the streamer hears what they're playing.
-      source.connect(sharedAudioContext.destination);
+      // Also monitor it locally, so the streamer hears what they're playing —
+      // but THROUGH a gain node so they can set how loud it is FOR THEM (default
+      // 50%) without changing what others hear. The node persists across file
+      // swaps; only the source feeding it is recreated.
+      if (!g.fileMonitorGain) {
+        g.fileMonitorGain = sharedAudioContext.createGain();
+        g.fileMonitorGain.gain.value = store.getState().streamMonitorVolume;
+        g.fileMonitorGain.connect(sharedAudioContext.destination);
+      }
+      source.connect(g.fileMonitorGain);
 
       // Stop the whole stream when the file ends or fails to decode.
       const ac = new AbortController();
@@ -2691,6 +2709,21 @@ export function useMediasoup() {
     [store],
   );
 
+  // Live local-monitor volume for the file/URL stream: persists the value and
+  // ramps the monitor gain node. Only changes what the streamer hears — the
+  // produced track (fileDest) everyone else consumes is untouched.
+  const setStreamMonitorVolume = useCallback(
+    (volume: number) => {
+      store.getState().setStreamMonitorVolume(volume);
+      outGraphRef.current?.fileMonitorGain?.gain.setTargetAtTime(
+        volume,
+        sharedAudioContext.currentTime,
+        GAIN_RAMP,
+      );
+    },
+    [store],
+  );
+
   // Send a chat message. Returns why it didn't go out so the caller can keep
   // the text in the box ("empty"/"rate_limited" — never cleared on failure).
   // A blocked send plays the "thunk" cue; the delivered message comes back via
@@ -2742,6 +2775,7 @@ export function useMediasoup() {
       g.shareDest?.disconnect();
       g.fileSource?.disconnect();
       g.fileDest?.disconnect();
+      g.fileMonitorGain?.disconnect();
       outGraphRef.current = null;
     }
     // Tear down every outgoing extra mic — the capture + Web Audio nodes are
@@ -2839,6 +2873,7 @@ export function useMediasoup() {
     setPeerVolume,
     setPeerLocalMute,
     setMicGain,
+    setStreamMonitorVolume,
     sendChatMessage,
     announceSpeakers,
     peerAudiosRef,
