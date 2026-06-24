@@ -92,6 +92,8 @@ export function Room() {
     sendChatMessage,
     decideJoinRequest,
     voteKick,
+    kickCaster,
+    stopPeerStream,
     announceSpeakers,
   } = useMediasoup();
 
@@ -512,6 +514,7 @@ export function Room() {
                 isMuted,
                 volume: 1,
                 isMusic: false,
+                isCaster: false,
                 isMicStream: false,
                 kickVotes: 0,
                 iVotedKick: false,
@@ -525,6 +528,8 @@ export function Room() {
               onLocalMuteChange={setPeerLocalMute}
               kickEnabled={kickEnabled}
               onToggleKick={(id) => voteKick(id, !peers.get(id)?.iVotedKick)}
+              onKickCaster={kickCaster}
+              onStopStream={stopPeerStream}
               announce={announce}
               speakerBadges={speakerBadges}
             />

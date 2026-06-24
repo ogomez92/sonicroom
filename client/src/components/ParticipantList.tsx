@@ -7,6 +7,8 @@ import {
   VolumeX,
   Music,
   UserX,
+  Ban,
+  CircleStop,
   ChevronRight,
   ChevronLeft,
 } from "lucide-react";
@@ -28,6 +30,13 @@ interface ParticipantListProps {
   // gating still excludes streams (isMusic) and ourself.
   kickEnabled: boolean;
   onToggleKick: (peerId: string) => void;
+  // Remove a music caster (Ecobox) outright — offered on caster rows in ANY
+  // room (public or private), independent of vote-to-kick.
+  onKickCaster: (peerId: string) => void;
+  // Stop a peer's share/file/extra-mic media stream (the tile's key IS the
+  // producerId) — offered on those media tiles in any room, anti-troll. Stops the
+  // stream, not the person.
+  onStopStream: (producerId: string) => void;
   // Transient, listener-only announcements (per CLAUDE.md: NOT announceEvent).
   announce: (message: string) => void;
   // peerId → rank (1-based) for the most recent talkers, shown as a transient
@@ -66,6 +75,8 @@ export function ParticipantList({
   onLocalMuteChange,
   kickEnabled,
   onToggleKick,
+  onKickCaster,
+  onStopStream,
   announce,
   speakerBadges,
 }: ParticipantListProps) {
@@ -183,6 +194,13 @@ export function ParticipantList({
           kickEnabled && !openPeer.isMusic && !openPeer.isMicStream && !isSelf(openPeer.peerId)
         }
         onToggleKick={onToggleKick}
+        showKickCaster={openPeer.isCaster}
+        onKickCaster={onKickCaster}
+        // Any per-stream media tile — a share/file (isMusic, but not the caster) or
+        // an extra mic (isMicStream; people stream music through a virtual cable).
+        // The tile's key is the producerId the stop targets.
+        showStopStream={(openPeer.isMusic && !openPeer.isCaster) || openPeer.isMicStream}
+        onStopStream={onStopStream}
         announce={announce}
         onClose={closeOptions}
       />
@@ -319,6 +337,12 @@ interface ParticipantOptionsProps {
   onLocalMuteChange: (peerId: string, muted: boolean) => void;
   showKick: boolean;
   onToggleKick: (peerId: string) => void;
+  // Caster (Ecobox) only: offer an immediate "Remove caster" action.
+  showKickCaster: boolean;
+  onKickCaster: (peerId: string) => void;
+  // Share/file media tile only: offer an immediate "Stop this stream" action.
+  showStopStream: boolean;
+  onStopStream: (producerId: string) => void;
   announce: (message: string) => void;
   onClose: () => void;
 }
@@ -367,6 +391,10 @@ function ParticipantOptions({
   onLocalMuteChange,
   showKick,
   onToggleKick,
+  showKickCaster,
+  onKickCaster,
+  showStopStream,
+  onStopStream,
   announce,
   onClose,
 }: ParticipantOptionsProps) {
@@ -426,6 +454,25 @@ function ParticipantOptions({
             ? m.card_kick_with_votes({ name, votes: votesPhrase })
             : m.card_kick({ name }),
         activate: () => onToggleKick(peer.peerId),
+      });
+    }
+    // Caster (Ecobox): an immediate, non-vote removal — available in any room.
+    // It's not a toggle (no per-user state); activating removes the caster.
+    if (showKickCaster) {
+      opts.push({
+        id: "remove-caster",
+        kind: "toggle",
+        ariaLabel: m.card_remove_caster({ name }),
+        activate: () => onKickCaster(peer.peerId),
+      });
+    }
+    // Share/file media tile: stop the stream (the tile's peerId IS the producerId).
+    if (showStopStream) {
+      opts.push({
+        id: "stop-stream",
+        kind: "toggle",
+        ariaLabel: m.card_stop_stream({ name }),
+        activate: () => onStopStream(peer.peerId),
       });
     }
   }
@@ -544,6 +591,9 @@ function ParticipantOptions({
             const isActive = i === activeIdx;
             const muteOn = opt.id === "mute" && peer.localMuted;
             const kickOn = opt.id === "kick" && peer.iVotedKick;
+            const removeCaster = opt.id === "remove-caster";
+            const stopStream = opt.id === "stop-stream";
+            const destructive = removeCaster || stopStream;
             return (
               <li
                 key={opt.id}
@@ -561,9 +611,13 @@ function ParticipantOptions({
                     ? "bg-red-600 text-white"
                     : muteOn
                       ? "bg-sonic-accent/20 text-sonic-accent"
-                      : isActive
-                        ? "bg-sonic-accent/15 text-sonic-50"
-                        : "text-sonic-200"
+                      : destructive
+                        ? isActive
+                          ? "bg-red-600/20 text-red-300"
+                          : "text-red-400"
+                        : isActive
+                          ? "bg-sonic-accent/15 text-sonic-50"
+                          : "text-sonic-200"
                 }`}
               >
                 {opt.kind === "slider" ? (
@@ -598,6 +652,16 @@ function ParticipantOptions({
                     <span className="truncate">
                       {muteOn ? m.participants_unmute({ name }) : m.participants_mute({ name })}
                     </span>
+                  </>
+                ) : removeCaster ? (
+                  <>
+                    <Ban className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{m.card_remove_caster_label()}</span>
+                  </>
+                ) : stopStream ? (
+                  <>
+                    <CircleStop className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{m.card_stop_stream_label()}</span>
                   </>
                 ) : (
                   <>

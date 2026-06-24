@@ -183,6 +183,12 @@ export interface PeerState {
   // True for a send-only "music caster" peer (e.g. Ecobox): rendered with a
   // music icon and treated as a media source rather than a talking participant.
   isMusic: boolean;
+  // True ONLY for an actual music-caster peer (Ecobox), a stricter flag than
+  // isMusic (which is also set on synthetic share/file tiles). Gates the
+  // "Remove caster" option: a caster can be removed immediately by anyone, in any
+  // room, since it's infrastructure — share/file streams belong to humans and
+  // aren't removable this way.
+  isCaster: boolean;
   // True for an EXTRA-microphone stream tile (a peer's additional input device,
   // a separate "mic" producer keyed by producerId). Like `isMusic` it's a media
   // tile, not a votable human, so it's excluded from vote-to-kick — but UNLIKE
@@ -379,6 +385,7 @@ interface RoomState {
   // Toggle our local (listener-side) mute of one peer/stream. Pure client state.
   setPeerLocalMute: (peerId: string, muted: boolean) => void;
   setPeerMusic: (peerId: string, isMusic: boolean) => void;
+  setPeerCaster: (peerId: string, isCaster: boolean) => void;
   setPeerMicStream: (peerId: string, isMicStream: boolean) => void;
   // Rename a tile (used when a file streamer swaps files mid-stream: the producer
   // — and thus its tile, keyed by producerId — persists, only its label changes).
@@ -589,6 +596,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
         isMuted: false,
         volume: 1,
         isMusic: false,
+        isCaster: false,
         isMicStream: false,
         kickVotes: 0,
         iVotedKick: false,
@@ -653,6 +661,14 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       const peers = new Map(state.peers);
       const peer = peers.get(peerId);
       if (peer) peers.set(peerId, { ...peer, isMusic });
+      return { peers };
+    }),
+
+  setPeerCaster: (peerId, isCaster) =>
+    set((state) => {
+      const peers = new Map(state.peers);
+      const peer = peers.get(peerId);
+      if (peer) peers.set(peerId, { ...peer, isCaster });
       return { peers };
     }),
 

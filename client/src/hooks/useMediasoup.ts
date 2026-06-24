@@ -47,6 +47,9 @@ import {
   announce_kick_vote,
   announce_kick_vote_withdrawn,
   announce_peer_kicked,
+  announce_caster_removed,
+  announce_peer_stream_stopped,
+  announce_your_stream_stopped,
   announce_you_were_kicked,
   announce_no_mic,
   announce_speakers_none,
@@ -305,6 +308,11 @@ export function useMediasoup() {
   const fileAudioRef = useRef<HTMLAudioElement | null>(null);
   const fileObjectUrlRef = useRef<string | null>(null);
   const fileAbortRef = useRef<AbortController | null>(null);
+  // Owner-side "someone stopped my stream" cleanup, bridged through a ref: the
+  // join callback registers the peer-stream-stopped handler but is defined before
+  // the share/file teardown helpers, so it calls through this (kept current by an
+  // effect right after those helpers).
+  const stopOwnStreamLocalRef = useRef<(source: "share" | "file") => void>(() => {});
   // Other peers' incoming file streams: producerId -> owner peerId, mirroring
   // shareOwnersRef so a peer can stream a file AND share system audio at once
   // without the two tearing each other's tiles down.
@@ -946,6 +954,9 @@ export function useMediasoup() {
           store.getState().announceEvent(announce_music_started({ name }));
         }
         store.getState().setPeerMusic(peerId, true);
+        // Also flag it as an actual caster (a stricter flag than isMusic, which
+        // share/file tiles share) so the UI offers the immediate "Remove caster".
+        store.getState().setPeerCaster(peerId, true);
       }
 
       // Start at the correct gain: respects deafen, and ducks immediately if a
@@ -1819,7 +1830,15 @@ export function useMediasoup() {
       // it to chat as an event (rule: room events go to chat via announceEvent).
       socket.on(
         "peer-kicked",
-        ({ peerId, displayName }: { peerId: string; displayName: string }) => {
+        ({
+          peerId,
+          displayName,
+          reason,
+        }: {
+          peerId: string;
+          displayName: string;
+          reason?: "vote" | "caster";
+        }) => {
           const name = store.getState().peers.get(peerId)?.displayName ?? displayName;
           const pc = p2pConnectionsRef.current.get(peerId);
           if (pc) {
@@ -1842,7 +1861,11 @@ export function useMediasoup() {
             if (owner === peerId) removeMicStream(producerId);
           }
           store.getState().removePeer(peerId);
-          store.getState().announceEvent(announce_peer_kicked({ name }));
+          store
+            .getState()
+            .announceEvent(
+              reason === "caster" ? announce_caster_removed({ name }) : announce_peer_kicked({ name }),
+            );
           playCue(sharedAudioContext, "leave");
         },
       );
@@ -2116,6 +2139,57 @@ export function useMediasoup() {
         },
       );
 
+      // Someone stopped a peer's share/file/extra-mic stream outright (anti-troll,
+      // not a vote). The server already closed the producer; we just reconcile the
+      // UI. If it's OURS, run owner-side local cleanup WITHOUT re-telling the
+      // server; otherwise tear down the tile.
+      socket.on(
+        "peer-stream-stopped",
+        ({
+          ownerId,
+          producerId,
+          source,
+        }: {
+          ownerId: string;
+          producerId: string;
+          source: "share" | "file" | "mic";
+        }) => {
+          if (ownerId === store.getState().localPeerId) {
+            if (source === "mic") {
+              // Deselect the device whose producer this is; the extra-mic reconcile
+              // effect then tears down the capture + (already-closed) producer and
+              // announces — so we don't announce here (avoids a double).
+              let deviceId: string | null = null;
+              for (const [dId, entry] of extraMicsRef.current) {
+                if (entry.producer?.id === producerId) {
+                  deviceId = dId;
+                  break;
+                }
+              }
+              if (deviceId) {
+                const remaining = store
+                  .getState()
+                  .streamedMicDeviceIds.filter((d) => d !== deviceId);
+                store.getState().setStreamedMicDeviceIds(remaining);
+              }
+              return;
+            }
+            // Share/file: close the producer + stop local playback in place.
+            stopOwnStreamLocalRef.current(source);
+            store.getState().announceEvent(announce_your_stream_stopped());
+            playCue(sharedAudioContext, "share-stop");
+            return;
+          }
+          if (source === "share") removeShareStream(producerId);
+          else if (source === "file") removeFileStream(producerId);
+          else removeMicStream(producerId);
+          const name =
+            store.getState().peers.get(ownerId)?.displayName ?? announce_a_participant();
+          store.getState().announceEvent(announce_peer_stream_stopped({ name }));
+          playCue(sharedAudioContext, "share-stop");
+        },
+      );
+
       // A media producer's detail changed (a file streamer swapped files) — the
       // producer (and its tile, keyed by producerId) persists, so just re-label it
       // from the owner's name + the new title. Owner/source come from whichever
@@ -2351,22 +2425,29 @@ export function useMediasoup() {
     displayStreamRef.current = null;
   }, []);
 
-  const stopAudioShare = useCallback(async () => {
-    if (!store.getState().isSharingAudio) return;
-    // Close our stereo share producer, then detach the shared-audio nodes.
+  // Local-only teardown of OUR share: close the producer, detach the nodes, clear
+  // the flag. No server emit, no announcement — shared by the user-initiated stop
+  // (below) and the "someone stopped my stream" path (peer-stream-stopped), which
+  // must NOT re-tell the server (it already closed the producer).
+  const teardownShareLocal = useCallback(() => {
     if (musicProducerRef.current) {
       if (!musicProducerRef.current.closed) musicProducerRef.current.close();
       musicProducerRef.current = null;
     }
     detachSharedAudio();
     store.getState().setSharingAudio(false);
+  }, [store, detachSharedAudio]);
+
+  const stopAudioShare = useCallback(async () => {
+    if (!store.getState().isSharingAudio) return;
+    teardownShareLocal();
     // Tell the server: drop us from the sharer set (may release the SFU pin)
     // and close the server-side producer so peers' tiles disappear.
     await emit("stop-share").catch(() => {});
     // Local feedback; peers get theirs via the share-stopped broadcast.
     store.getState().announceEvent(announce_share_stopped_you());
     playCue(sharedAudioContext, "share-stop");
-  }, [store, detachSharedAudio, emit]);
+  }, [store, teardownShareLocal, emit]);
 
   const startAudioShare = useCallback(async () => {
     if (store.getState().isSharingAudio) return;
@@ -2445,44 +2526,58 @@ export function useMediasoup() {
   // by an <audio> element whose Web Audio source feeds its own destination
   // (produced) and the local speakers (monitored). Like a share it forces SFU
   // and is auto-tapped by recording/streaming server-side. ---
+  // Local-only teardown of OUR file stream: stop the <audio>, close the producer,
+  // disconnect the nodes, clear state. No server emit / announcement — shared by
+  // the user-initiated stop (below) and the "someone stopped my stream" path.
+  const teardownFileLocal = useCallback(() => {
+    // Drop the element's ended/error listeners first so teardown can't fire them.
+    fileAbortRef.current?.abort();
+    fileAbortRef.current = null;
+    if (fileProducerRef.current) {
+      if (!fileProducerRef.current.closed) fileProducerRef.current.close();
+      fileProducerRef.current = null;
+    }
+    const g = outGraphRef.current;
+    g?.fileSource?.disconnect();
+    g?.fileDest?.disconnect();
+    g?.fileMonitorGain?.disconnect();
+    if (g) {
+      g.fileSource = null;
+      g.fileDest = null;
+      g.fileMonitorGain = null;
+    }
+    if (fileAudioRef.current) {
+      fileAudioRef.current.pause();
+      fileAudioRef.current.src = "";
+      fileAudioRef.current = null;
+    }
+    if (fileObjectUrlRef.current) {
+      URL.revokeObjectURL(fileObjectUrlRef.current);
+      fileObjectUrlRef.current = null;
+    }
+    store.getState().setFileStream(null);
+    store.getState().setFileStreamPlaying(false);
+  }, [store]);
+
   const stopFileStream = useCallback(
     async (announcement?: string) => {
       if (store.getState().fileStreamName == null) return;
-      // Drop the element's ended/error listeners first so teardown can't fire them.
-      fileAbortRef.current?.abort();
-      fileAbortRef.current = null;
-      if (fileProducerRef.current) {
-        if (!fileProducerRef.current.closed) fileProducerRef.current.close();
-        fileProducerRef.current = null;
-      }
-      const g = outGraphRef.current;
-      g?.fileSource?.disconnect();
-      g?.fileDest?.disconnect();
-      g?.fileMonitorGain?.disconnect();
-      if (g) {
-        g.fileSource = null;
-        g.fileDest = null;
-        g.fileMonitorGain = null;
-      }
-      if (fileAudioRef.current) {
-        fileAudioRef.current.pause();
-        fileAudioRef.current.src = "";
-        fileAudioRef.current = null;
-      }
-      if (fileObjectUrlRef.current) {
-        URL.revokeObjectURL(fileObjectUrlRef.current);
-        fileObjectUrlRef.current = null;
-      }
-      store.getState().setFileStream(null);
-      store.getState().setFileStreamPlaying(false);
+      teardownFileLocal();
       // Tell the server: drop us from the file-streamer set (may release the SFU
       // pin) and close the server-side producer so peers' tiles disappear.
       await emit("stop-file-stream").catch(() => {});
       store.getState().announceEvent(announcement ?? announce_file_stream_stopped_you());
       playCue(sharedAudioContext, "share-stop");
     },
-    [store, emit],
+    [store, teardownFileLocal, emit],
   );
+
+  // Keep the owner-side teardown bridge current for the peer-stream-stopped
+  // handler registered in join() (see stopOwnStreamLocalRef).
+  useEffect(() => {
+    stopOwnStreamLocalRef.current = (source) =>
+      source === "share" ? teardownShareLocal() : teardownFileLocal();
+  }, [teardownShareLocal, teardownFileLocal]);
 
   const startFileSource = useCallback(
     async (src: string, name: string, objectUrl?: string) => {
@@ -2831,6 +2926,33 @@ export function useMediasoup() {
     [emit],
   );
 
+  // Remove a music caster (e.g. Ecobox) outright — available to anyone, in
+  // public AND private rooms (casters can't be vote-kicked and bypass the knock
+  // gate, so an abusive one would otherwise be unremovable). The server hard-
+  // limits this to caster targets; on success it broadcasts `peer-kicked` like a
+  // vote-kick, so our own teardown runs through that handler. A rejection thunks.
+  const kickCaster = useCallback(
+    (targetId: string) => {
+      emit("kick-caster", { targetId }).catch(() => {
+        playCue(sharedAudioContext, "thunk");
+      });
+    },
+    [emit],
+  );
+
+  // Stop one peer's share/file stream outright (anti-troll), in any room — the
+  // person stays, only the stream ends. The server hard-limits this to share/file
+  // producers and authoritatively closes it, then broadcasts peer-stream-stopped.
+  // A rejection thunks.
+  const stopPeerStream = useCallback(
+    (producerId: string) => {
+      emit("stop-peer-stream", { producerId }).catch(() => {
+        playCue(sharedAudioContext, "thunk");
+      });
+    },
+    [emit],
+  );
+
   // While anyone is waiting at the door, loop the knock cue so participants
   // notice. Driven on the audio thread (not a setInterval, which browsers
   // throttle/suspend for background tabs — that made it knock once and stop when
@@ -2853,6 +2975,8 @@ export function useMediasoup() {
     leave,
     decideJoinRequest,
     voteKick,
+    kickCaster,
+    stopPeerStream,
     mute,
     unmute,
     toggleMute,

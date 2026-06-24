@@ -337,6 +337,8 @@ export function createSignalingServer(
   // walk back in (the same soft ban a knock-deny applies), tears them down, then
   // force-disconnects their socket. Emitting before disconnecting flushes the
   // notice to them first; a server-initiated disconnect won't auto-reconnect.
+  // (A caster removal is NOT a vote-kick — it goes through kick-caster, which
+  // does NOT ban; `reason` lets the client tell the two announcements apart.)
   function kickPeer(room: Room, targetId: string) {
     const target = room.peers.get(targetId);
     if (!target) {
@@ -349,6 +351,7 @@ export function createSignalingServer(
     io.to(room.name).except(targetId).emit("peer-kicked", {
       peerId: targetId,
       displayName: target.displayName,
+      reason: "vote",
     });
     io.to(targetId).emit("you-were-kicked", {});
     console.log(`[ws] ${target.displayName} (${targetId}) kicked from ${room.name} by vote`);
@@ -1230,6 +1233,103 @@ export function createSignalingServer(
 
       // A fresh vote may have reached the threshold (or a withdraw left it below).
       settleKicks(room);
+      cb?.({ ok: true });
+    });
+
+    // --- Kick a caster (send-only music source like Ecobox) immediately ---
+    // Casters are infrastructure, not participants: they bypass the knock gate
+    // and are excluded from vote-to-kick, so an abusive one (stupid music / a
+    // bogus file) would otherwise be unremovable. ANY peer can remove one
+    // outright, in BOTH public and private rooms — the "no moderators / collective
+    // only" rule governs removing *humans*; a caster isn't one. The target is
+    // HARD-GUARDED to `room.casters`, so this can never be turned on a person.
+    // Deliberately does NOT IP-ban (unlike a vote-kick): it's a troll speed bump,
+    // not a ban. A server-initiated disconnect doesn't auto-reconnect, so the
+    // caster stays gone until someone relaunches it.
+    socket.on("kick-caster", (data: unknown, cb?: (res: unknown) => void) => {
+      if (!currentRoom || !currentPeer) return cb?.({ ok: false, error: "Not in a room" });
+      const room = currentRoom;
+      const parsed = z.object({ targetId: z.string() }).safeParse(data);
+      if (!parsed.success) return cb?.({ ok: false, error: "Invalid target" });
+      const { targetId } = parsed.data;
+      const target = room.peers.get(targetId);
+      // The safety invariant: only ever a caster, never a human peer.
+      if (!target || !room.casters.has(targetId)) return cb?.({ ok: false, error: "not_a_caster" });
+      console.log(
+        `[ws] ${currentPeer.displayName} removed caster ${target.displayName} (${targetId}) from ${room.name}`,
+      );
+      // Tell the room (tiles tear down + announce); teardownPeer drops the caster
+      // from room.casters (releasing the SFU pin) and re-evaluates the mode.
+      io.to(room.name).except(targetId).emit("peer-kicked", {
+        peerId: targetId,
+        displayName: target.displayName,
+        reason: "caster",
+      });
+      teardownPeer(room, targetId, { announceLeft: false });
+      io.sockets.sockets.get(targetId)?.disconnect(true);
+      cb?.({ ok: true });
+    });
+
+    // --- Stop one peer's media stream (a shared system/tab audio, a streamed
+    // file, or an extra mic — people stream music through a virtual audio cable as
+    // an extra mic) without removing the person — for a "bogus file"/blasted-audio
+    // troll. Like kick-caster it's an immediate, non-vote action available in ANY
+    // room; the "no moderators" rule is about removing *people*, and this stops a
+    // stream, not a person (their voice/seat stay). HARD-GUARDED to "share"/"file"
+    // /"mic" producers: never the primary voice, and never a caster's music (that
+    // goes through kick-caster). The server authoritatively closes the producer (a
+    // troll's own client can't be trusted to), tears down listeners' tiles via the
+    // usual *-stopped path, and signals the owner to clean up locally.
+    socket.on("stop-peer-stream", (data: unknown, cb?: (res: unknown) => void) => {
+      if (!currentRoom || !currentPeer) return cb?.({ ok: false, error: "Not in a room" });
+      const room = currentRoom;
+      const parsed = z.object({ producerId: z.string() }).safeParse(data);
+      if (!parsed.success) return cb?.({ ok: false, error: "Invalid target" });
+      const { producerId } = parsed.data;
+
+      // Locate the owning peer + the producer's source.
+      let found: { ownerId: string; owner: Peer; source: string } | null = null;
+      for (const [pid, p] of room.peers) {
+        const prod = p.producers.get(producerId);
+        if (prod) {
+          found = { ownerId: pid, owner: p, source: (prod.appData?.source as string) ?? "voice" };
+          break;
+        }
+      }
+      if (!found || (found.source !== "share" && found.source !== "file" && found.source !== "mic")) {
+        return cb?.({ ok: false, error: "not_a_stream" });
+      }
+      const { ownerId, owner, source } = found;
+
+      owner.producers.get(producerId)?.close();
+      owner.producers.delete(producerId);
+      // Stop its capture/feed if recording/streaming — otherwise the recorder/
+      // mixer idles on a dead port until it ends.
+      if (recordingManager.isRecording(room.name)) {
+        void recordingManager.removeProducer(room.name, producerId).catch(() => {});
+      }
+      if (streamManager.isStreaming(room.name)) {
+        void streamManager.removeProducer(room.name, producerId).catch(() => {});
+      }
+      // Release the SFU pin once the owner has no more producers of this source (a
+      // peer can run several extra mics, so only the last one drops the pin).
+      const stillHas = Array.from(owner.producers.values()).some(
+        (p) => (p.appData?.source as string) === source,
+      );
+      if (!stillHas) {
+        if (source === "share") room.sharers.delete(ownerId);
+        else if (source === "file") room.fileStreamers.delete(ownerId);
+        else room.extraMicStreamers.delete(ownerId);
+      }
+
+      console.log(
+        `[ws] ${currentPeer.displayName} stopped ${owner.displayName}'s ${source} stream (${producerId}) in ${room.name}`,
+      );
+
+      // One broadcast to the whole room: listeners tear down the tile, the owner
+      // cleans up their own local playback/producer (keyed off ownerId === self).
+      io.to(room.name).emit("peer-stream-stopped", { ownerId, producerId, source });
+      applyModeDecision(room);
       cb?.({ ok: true });
     });
 
