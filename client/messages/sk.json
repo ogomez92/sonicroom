@@ -172,6 +172,7 @@
   "file_player_stop": "Zastaviť prehrávanie súboru",
   "file_player_streaming": "Prehrávanie {name}",
   "file_player_hint": "Medzerník spustí alebo pozastaví, Escape ukončí prehrávanie",
+  "file_player_volume_label": "Vaša hlasitosť (má vplyv na to, čo počujete len vy, nie ostatní)",
   "audio_source_heading": "Prehrať zvuk",
   "audio_source_computer": "Vybrať z počítača",
   "audio_source_url_label": "URL adresa na zvuk",
