@@ -51,8 +51,6 @@ import {
   announce_your_stream_stopped,
   announce_you_were_kicked,
   announce_no_mic,
-  announce_speakers_none,
-  announce_speakers_list,
   file_stream_name,
   file_stream_name_titled,
   file_player_streaming,
@@ -65,6 +63,7 @@ import { useRoomStore, type RoomMode, type JoinRequest } from "../stores/room";
 import { apiUrl, iceServers, socketTarget } from "../lib/runtime-config";
 import { PeerAudioRegistry } from "../lib/audio/peer-audio-registry";
 import { OutgoingAudioGraph } from "../lib/audio/outgoing-graph";
+import { SpeakingDetector } from "../lib/audio/speaking-detector";
 import { sharedAudioContext, resumeContext } from "../lib/audio/shared-context";
 
 // ICE servers (with optional per-instance overrides) live in runtime-config.ts —
@@ -75,21 +74,8 @@ import { sharedAudioContext, resumeContext } from "../lib/audio/shared-context";
 // lib/audio/shared-context.ts (imported above); the per-peer gain math + ducking
 // constants live in lib/audio/peer-audio-registry.ts.
 
-// "Who's talking" detection (client-side, works in both P2P and SFU — the
-// server can't tell us who's talking in a 2-person P2P room). We poll each
-// incoming voice analyser this often and treat a peer as speaking once their
-// short-term RMS crosses SPEAK_THRESHOLD; a brief hold keeps the flag (and the
-// speaking ring) from flickering between words. Cheap: an AnalyserNode only
-// computes when read, and we read a few small buffers a handful of times a
-// second — the same approach MicPreview already uses for the mic meter.
-const SPEAK_POLL_MS = 120;
-const SPEAK_THRESHOLD = 0.012; // RMS over the analyser window (~ -38 dBFS)
-const SPEAK_HOLD_MS = 600; // stay "speaking" this long after dropping below
-// How many recent talkers the W readout announces + numbers, and how long the
-// numbered badges stay on their tiles.
-const RECENT_SPEAKERS_MAX = 3;
-const RECENT_SPEAKERS_KEEP = 12; // history kept (≥ MAX) so departures don't starve it
-const SPEAKER_BADGE_MS = 3000;
+// "Who's talking" detection (poll loop + recent-talkers ring + announceSpeakers)
+// lives in lib/audio/speaking-detector.ts.
 
 // Rapid mute/duck toggling would otherwise announce + chime on every single
 // flip — mute 10× and everyone hears/reads it 10×. Coalesce a burst: surface the
@@ -136,17 +122,7 @@ export function useMediasoup() {
   // still works; we just never acquire a mic and stay muted. Persists across
   // reconnects so a rejoin doesn't re-prompt.
   const noMicRef = useRef(false);
-  // Client-side per-peer speaking detection (see the detection loop below).
-  // speakLoudAtRef: last time each voice peer was above threshold (for the
-  // hold); speakingRef: the debounced on/off we've pushed to the store;
-  // recentSpeakersRef: most-recent-first talk history feeding the W readout;
-  // speakBufRef: a reused scratch buffer; speakerBadgeTimerRef: clears the
-  // numbered badges a couple of seconds after the readout.
-  const speakLoudAtRef = useRef<Map<string, number>>(new Map());
-  const speakingRef = useRef<Map<string, boolean>>(new Map());
-  const recentSpeakersRef = useRef<string[]>([]);
-  const speakBufRef = useRef<Float32Array<ArrayBuffer> | null>(null);
-  const speakerBadgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Client-side per-peer speaking detection lives in SpeakingDetector (below).
   // P2P
   const p2pConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   // Remote ICE candidates that arrived before their peer connection had a
@@ -285,6 +261,10 @@ export function useMediasoup() {
     }),
   );
   const graph = graphRef.current;
+
+  // Client-side "who's talking" detection: polls the registry's per-peer analysers.
+  const detectorRef = useRef(new SpeakingDetector(store, registry));
+  const detector = detectorRef.current;
   // The registry owns the live map; expose it by stable reference (never reassigned)
   // so the returned ref and the speaking detector read the same Map it mutates.
   const peerAudiosRef = useRef(registry.peerAudios);
@@ -335,86 +315,12 @@ export function useMediasoup() {
     map.set(key, s);
   }, []);
 
-  // --- "Who's talking" detection (client-side) ---
-  // Continuously, cheaply measures which PEOPLE are talking by reading each
-  // incoming voice analyser's RMS. Drives the per-peer "speaking" ring live, and
-  // feeds the recent-talkers history that announceSpeakers (W / button) reads
-  // out. Only human voice tiles are measured: music/share/file/extra-mic tiles
-  // are filtered out via the store's isMusic/isMicStream flags (a voice tile is
-  // keyed by peerId and is neither). Runs for the hook's lifetime; the body is a
-  // no-op (zero analysers) until peers are consumed, so it's free in the lobby.
-  useEffect(() => {
-    const id = setInterval(() => {
-      const peers = store.getState().peers;
-      const now = Date.now();
-      for (const [key, pa] of peerAudiosRef.current) {
-        const ps = peers.get(key);
-        if (!ps || ps.isMusic || ps.isMicStream) continue;
-        let buf = speakBufRef.current;
-        if (!buf || buf.length !== pa.analyser.fftSize) {
-          buf = new Float32Array(pa.analyser.fftSize);
-          speakBufRef.current = buf;
-        }
-        pa.analyser.getFloatTimeDomainData(buf);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-        const rms = Math.sqrt(sum / buf.length);
-        if (rms >= SPEAK_THRESHOLD) speakLoudAtRef.current.set(key, now);
-        const heldLoud = now - (speakLoudAtRef.current.get(key) ?? 0) < SPEAK_HOLD_MS;
-        const was = speakingRef.current.get(key) ?? false;
-        if (heldLoud === was) continue;
-        speakingRef.current.set(key, heldLoud);
-        store.getState().setPeerSpeaking(key, heldLoud);
-        // On a rising edge, push this talker to the front of the recency list
-        // (deduped, capped) — newest first, the order the readout numbers them.
-        if (heldLoud) {
-          const list = recentSpeakersRef.current.filter((p) => p !== key);
-          list.unshift(key);
-          recentSpeakersRef.current = list.slice(0, RECENT_SPEAKERS_KEEP);
-        }
-      }
-      // Forget detection state for tiles that have gone away.
-      for (const key of speakingRef.current.keys()) {
-        if (!peerAudiosRef.current.has(key)) {
-          speakingRef.current.delete(key);
-          speakLoudAtRef.current.delete(key);
-        }
-      }
-    }, SPEAK_POLL_MS);
-    return () => {
-      clearInterval(id);
-      if (speakerBadgeTimerRef.current) clearTimeout(speakerBadgeTimerRef.current);
-    };
-  }, [store]);
+  // Run the speaking-detection poll loop for the hook's lifetime (cleanup stops it
+  // + clears the badge timer). The detector reads the registry's analysers directly.
+  useEffect(() => detector.start(), [detector]);
 
-  // Announce + briefly number (1, 2, 3) the most recent talkers — both the W
-  // shortcut and the toolbar button call this. Transient (announce(), not
-  // announceEvent): it re-reads live state like the Alt+number chat readback, so
-  // it is NOT logged to chat. Drops anyone who has since left, caps to the top
-  // few, and clears the badges after a couple of seconds.
-  const announceSpeakers = useCallback(() => {
-    const peers = store.getState().peers;
-    const ids = recentSpeakersRef.current
-      .filter((peerId) => peers.has(peerId))
-      .slice(0, RECENT_SPEAKERS_MAX);
-    if (speakerBadgeTimerRef.current) clearTimeout(speakerBadgeTimerRef.current);
-    if (ids.length === 0) {
-      store.getState().setSpeakerBadges({});
-      store.getState().announce(announce_speakers_none());
-      return;
-    }
-    const badges: Record<string, number> = {};
-    const names = ids.map((peerId, i) => {
-      badges[peerId] = i + 1;
-      return `${i + 1}. ${peers.get(peerId)?.displayName ?? announce_a_participant()}`;
-    });
-    store.getState().setSpeakerBadges(badges);
-    store.getState().announce(announce_speakers_list({ names: names.join(", ") }));
-    speakerBadgeTimerRef.current = setTimeout(() => {
-      store.getState().setSpeakerBadges({});
-      speakerBadgeTimerRef.current = null;
-    }, SPEAKER_BADGE_MS);
-  }, [store]);
+  // Announce + briefly number the most recent talkers (W shortcut / toolbar button).
+  const announceSpeakers = useCallback(() => detector.announceSpeakers(), [detector]);
 
   // The outgoing audio graph (mic gain + soft limiter + the share/file producers)
   // lives in OutgoingAudioGraph. `connectMicToGraph` is a thin stable delegator so
