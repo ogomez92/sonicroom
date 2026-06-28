@@ -1,16 +1,15 @@
 import { useRef, useCallback, useEffect } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Device } from "mediasoup-client";
-import type { Transport, Producer, Consumer } from "mediasoup-client/types";
+import type { Transport, Producer } from "mediasoup-client/types";
 import { forceOpusParams } from "../lib/sdp-munger";
 import { applySpeakerToContext } from "../lib/audio-devices";
-import { isIOS, microphoneConstraints, extraMicConstraints } from "../lib/microphone";
+import { microphoneConstraints, extraMicConstraints } from "../lib/microphone";
 import { playCue, startKnockLoop } from "../lib/sounds";
 import { formatMessage, RateLimiter, META_SEP, type ChatMessage } from "../lib/chat";
 import {
   announce_joined,
   announce_left,
-  announce_music_started,
   announce_music_stopped,
   announce_chat_hint,
   announce_a_participant,
@@ -64,49 +63,16 @@ import {
 } from "../paraglide/messages.js";
 import { useRoomStore, type RoomMode, type JoinRequest } from "../stores/room";
 import { apiUrl, iceServers, socketTarget } from "../lib/runtime-config";
-
-interface ConsumeResult {
-  ok: boolean;
-  consumerId: string;
-  producerId: string;
-  kind: string;
-  rtpParameters: Record<string, unknown>;
-  error?: string;
-}
-
-interface PeerAudio {
-  audioEl: HTMLAudioElement;
-  gainNode: GainNode;
-  sourceNode: MediaStreamAudioSourceNode;
-  // Taps the incoming signal (pre-gain) for client-side "who's talking" level
-  // detection — see the speaking-detection loop. Passive: only does work when
-  // read, so leaving it permanently connected is effectively free.
-  analyser: AnalyserNode;
-  // SFU-only
-  consumer?: Consumer;
-}
+import { PeerAudioRegistry } from "../lib/audio/peer-audio-registry";
+import { sharedAudioContext, resumeContext, GAIN_RAMP } from "../lib/audio/shared-context";
 
 // ICE servers (with optional per-instance overrides) live in runtime-config.ts —
 // `iceServers()` returns the default coturn list on the web and whatever the
 // Electron client injects when pointed at another instance.
 
-// Shared AudioContext — single output buffer for all peers (lower latency than
-// one per peer). On iOS we let it adopt the device-native rate instead of pinning
-// 48 kHz, so WebKit doesn't resample/fight the hardware on every route change;
-// other browsers honour the pin cleanly.
-const sharedAudioContext = new AudioContext({
-  ...(isIOS ? {} : { sampleRate: 48000 }),
-  latencyHint: "interactive",
-});
-
-// Auto-ducking: how loud the music stays while someone is talking, and the
-// setTargetAtTime time-constants (seconds) for the gain ramps. Smaller = snappier.
-// Attack (duck down when a voice starts) is fast; release (bring the music back
-// when the voice stops) is a touch slower to avoid pumping between words.
-const DUCK_FACTOR = 0.22;
-const DUCK_ATTACK = 0.05;
-const DUCK_RELEASE = 0.09;
-const GAIN_RAMP = 0.03;
+// The shared AudioContext + its keep-alive + the gain-ramp time-constant live in
+// lib/audio/shared-context.ts (imported above); the per-peer gain math + ducking
+// constants live in lib/audio/peer-audio-registry.ts.
 
 // "Who's talking" detection (client-side, works in both P2P and SFU — the
 // server can't tell us who's talking in a 2-person P2P room). We poll each
@@ -137,65 +103,9 @@ const TOGGLE_DEDUP_MS = 1000;
 // fast attack. Adds ~5 ms of look-ahead latency, negligible for voice.
 const MIC_LIMITER = { threshold: -3, knee: 0, ratio: 20, attack: 0.003, release: 0.25 };
 
-// Keep the shared context running. iOS needs a user gesture to start it, and it
-// also drops to "suspended" or the WebKit-only "interrupted" state whenever the
-// audio route changes / the tab backgrounds — and without re-resuming, audio dies
-// until a reload (this is what "keeps fucking up" mid-call). So we resume on the
-// first AND every gesture, on each statechange, and when the tab refocuses.
-function resumeSharedContext() {
-  const state = sharedAudioContext.state as string;
-  if (state === "suspended" || state === "interrupted") {
-    // iOS rejects resume() while still interrupted (e.g. mid phone call); the
-    // statechange/visibility/gesture retries pick it up once it's allowed again.
-    sharedAudioContext.resume().catch(() => {});
-  }
-}
-document.addEventListener("touchstart", resumeSharedContext);
-document.addEventListener("click", resumeSharedContext);
-sharedAudioContext.addEventListener("statechange", resumeSharedContext);
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") resumeSharedContext();
-});
-
-function createAudioPipeline(track: MediaStreamTrack): Omit<PeerAudio, "consumer"> {
-  const stream = new MediaStream([track]);
-  const audioEl = new Audio();
-  audioEl.srcObject = stream;
-  audioEl.autoplay = true;
-  // iOS Safari requires webkit attributes
-  (audioEl as unknown as Record<string, boolean>).playsInline = true;
-  (audioEl as unknown as Record<string, string>).webkitPlaysinline = "true";
-  // Mute the HTML element — audio is routed through the shared AudioContext
-  audioEl.volume = 0;
-
-  resumeSharedContext();
-
-  const sourceNode = sharedAudioContext.createMediaStreamSource(stream);
-  const gainNode = sharedAudioContext.createGain();
-  gainNode.gain.value = 1;
-  sourceNode.connect(gainNode);
-  gainNode.connect(sharedAudioContext.destination);
-
-  // Tap the PRE-gain signal for speaking detection, so what we measure is what
-  // the peer is transmitting — independent of our local volume / deafen / mute.
-  // An AnalyserNode is passive (computes only when read) and is never connected
-  // onward, so it adds no audio and negligible cost.
-  const analyser = sharedAudioContext.createAnalyser();
-  analyser.fftSize = 512;
-  analyser.smoothingTimeConstant = 0;
-  sourceNode.connect(analyser);
-
-  return { audioEl, gainNode, sourceNode, analyser };
-}
-
-function destroyAudioPipeline(pa: PeerAudio) {
-  pa.consumer?.close();
-  pa.audioEl.srcObject = null;
-  pa.audioEl.pause();
-  pa.sourceNode.disconnect();
-  pa.gainNode.disconnect();
-  pa.analyser.disconnect();
-}
+// resumeContext (the keep-alive) lives in lib/audio/shared-context.ts and is
+// already wired to the document gestures / statechange / visibility there.
+// The per-peer pipeline build/destroy live in PeerAudioRegistry.
 
 // Apply the LOCAL user's hi-fi / low-latency Opus prefs to a REMOTE P2P
 // description before setRemoteDescription. Crucial RFC 7587 subtlety: the
@@ -223,7 +133,6 @@ export function useMediasoup() {
   const sendTransportRef = useRef<Transport | null>(null);
   const recvTransportRef = useRef<Transport | null>(null);
   const producerRef = useRef<Producer | null>(null);
-  const peerAudiosRef = useRef<Map<string, PeerAudio>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   // True when we joined WITHOUT a microphone (opted out, or none available /
   // permission denied) — we listen and use text chat only. The outgoing track is
@@ -231,8 +140,6 @@ export function useMediasoup() {
   // still works; we just never acquire a mic and stay muted. Persists across
   // reconnects so a rejoin doesn't re-prompt.
   const noMicRef = useRef(false);
-  // True while the server reports someone is talking (drives music ducking).
-  const isVoiceActiveRef = useRef(false);
   // Client-side per-peer speaking detection (see the detection loop below).
   // speakLoudAtRef: last time each voice peer was above threshold (for the
   // hold); speakingRef: the debounced on/off we've pushed to the store;
@@ -257,11 +164,6 @@ export function useMediasoup() {
   // queued candidates and build a dead connection.
   const offerSeqRef = useRef<Map<string, number>>(new Map());
   const modeRef = useRef<RoomMode>("p2p");
-  // Producers announced while the SFU transports were still being built —
-  // consumed at the end of setupSfu instead of being silently dropped.
-  const pendingProducersRef = useRef<
-    Array<{ peerId: string; producerId: string; source: string; title?: string }>
-  >([]);
   // P2P↔SFU transitions (and reconnect rebuilds) are serialized through this
   // promise chain so an in-flight transition always finishes tearing down /
   // building up before the next starts — overlapping async handlers could
@@ -297,9 +199,6 @@ export function useMediasoup() {
   const displayStreamRef = useRef<MediaStream | null>(null);
   // The local stereo "share" producer (SFU), separate from the voice producer.
   const musicProducerRef = useRef<Producer | null>(null);
-  // Other peers' incoming share streams: producerId -> owner peerId, so we can
-  // tear down a share "music" tile when its owner stops sharing or leaves.
-  const shareOwnersRef = useRef<Map<string, string>>(new Map());
   // Local file streaming (independent of the audio share above): the stereo
   // "file" producer (SFU), the <audio> element decoding the file, its object
   // URL, the Web Audio source node, and an AbortController for the element's
@@ -313,10 +212,6 @@ export function useMediasoup() {
   // the share/file teardown helpers, so it calls through this (kept current by an
   // effect right after those helpers).
   const stopOwnStreamLocalRef = useRef<(source: "share" | "file") => void>(() => {});
-  // Other peers' incoming file streams: producerId -> owner peerId, mirroring
-  // shareOwnersRef so a peer can stream a file AND share system audio at once
-  // without the two tearing each other's tiles down.
-  const fileOwnersRef = useRef<Map<string, string>>(new Map());
   // Our OUTGOING extra microphones, keyed by deviceId. Each entry owns a live
   // getUserMedia capture and routes it through Web Audio (source → dest) exactly
   // like share/file and the primary voice mic — we produce the DESTINATION's track,
@@ -342,9 +237,6 @@ export function useMediasoup() {
       }
     >
   >(new Map());
-  // Other peers' incoming extra-mic streams: producerId -> owner peerId,
-  // mirroring shareOwnersRef/fileOwnersRef.
-  const micStreamOwnersRef = useRef<Map<string, string>>(new Map());
   // Local anti-spam guard for instant "thunk" feedback (the server enforces the
   // same 5-per-10s budget authoritatively).
   const chatLimiterRef = useRef(new RateLimiter());
@@ -404,45 +296,21 @@ export function useMediasoup() {
     [],
   );
 
-  // The gain a peer's audio should currently play at, composing the listener's
-  // per-peer volume, deafen, and music auto-ducking (music drops while a voice
-  // is active). Voice peers are unaffected by ducking.
-  const effectiveGain = useCallback(
-    (peerId: string): number => {
-      const state = store.getState();
-      const peer = state.peers.get(peerId);
-      // No peer, room-wide deafen, or you locally muted this one → silence.
-      if (!peer || state.isDeafened || peer.localMuted) return 0;
-      // Ducking is gated by the room-wide toggle: with it off, music-type
-      // streams (caster/share/file) never dip under voice.
-      if (peer.isMusic && isVoiceActiveRef.current && state.duckingEnabled)
-        return peer.volume * DUCK_FACTOR;
-      return peer.volume;
-    },
-    [store],
+  // Incoming peer audio: the per-peer pipelines, owner maps, gain math, ducking,
+  // and SFU consume all live in PeerAudioRegistry. Constructed once (its methods
+  // are stable, so the delegators below carry empty dep arrays). It reads the live
+  // SFU device/recvTransport through getters, and the per-render socket through
+  // the stable `emit` (which late-binds socketRef at call time).
+  const registryRef = useRef(
+    new PeerAudioRegistry(sharedAudioContext, store, emit, {
+      getDevice: () => deviceRef.current,
+      getRecvTransport: () => recvTransportRef.current,
+    }),
   );
-
-  // Ramp every music peer's gain to its current effective value (respecting
-  // deafen, per-peer volume, the live duck state, and the room ducking toggle).
-  const rampMusicGains = useCallback(
-    (ramp: number = GAIN_RAMP) => {
-      const now = sharedAudioContext.currentTime;
-      for (const [peerId, pa] of peerAudiosRef.current) {
-        if (!store.getState().peers.get(peerId)?.isMusic) continue;
-        pa.gainNode.gain.setTargetAtTime(effectiveGain(peerId), now, ramp);
-      }
-    },
-    [store, effectiveGain],
-  );
-
-  // Server told us whether anyone is talking — ramp every music peer's gain.
-  const applyDuck = useCallback(
-    (active: boolean) => {
-      isVoiceActiveRef.current = active;
-      rampMusicGains(active ? DUCK_ATTACK : DUCK_RELEASE);
-    },
-    [rampMusicGains],
-  );
+  const registry = registryRef.current;
+  // The registry owns the live map; expose it by stable reference (never reassigned)
+  // so the returned ref and the speaking detector read the same Map it mutates.
+  const peerAudiosRef = useRef(registry.peerAudios);
 
   // Per-key state for the toggle coalescer (see TOGGLE_DEDUP_MS): a debounce
   // timer, the value we last surfaced, and the latest pending value + emitter.
@@ -488,19 +356,6 @@ export function useMediasoup() {
       }
     }, TOGGLE_DEDUP_MS);
     map.set(key, s);
-  }, []);
-
-  // --- Shared: clean up all peer audio ---
-  const cleanupAllPeerAudio = useCallback(() => {
-    for (const pa of peerAudiosRef.current.values()) {
-      destroyAudioPipeline(pa);
-    }
-    peerAudiosRef.current.clear();
-    // Share + file + extra-mic streams are keyed in peerAudiosRef too; drop their
-    // owner mappings so a re-consume (mode switch / reconnect) rebuilds them cleanly.
-    shareOwnersRef.current.clear();
-    fileOwnersRef.current.clear();
-    micStreamOwnersRef.current.clear();
   }, []);
 
   // --- "Who's talking" detection (client-side) ---
@@ -591,7 +446,7 @@ export function useMediasoup() {
     if (outGraphRef.current) return outGraphRef.current;
     // The mic now flows through the shared context, so it must be running
     // (it starts suspended on iOS until a user gesture).
-    resumeSharedContext();
+    resumeContext(sharedAudioContext);
     const ctx = sharedAudioContext;
     const micGain = ctx.createGain();
     micGain.gain.value = store.getState().micGain;
@@ -761,18 +616,10 @@ export function useMediasoup() {
         }
       };
 
-      // Remote track → audio pipeline
+      // Remote track → audio pipeline (registry starts it at the right gain so an
+      // SFU→P2P switch doesn't reset deafen / per-peer volume).
       pc.ontrack = (e) => {
-        const remoteTrack = e.track;
-        if ("playoutDelayHint" in remoteTrack) {
-          (remoteTrack as unknown as Record<string, number>).playoutDelayHint = 0;
-        }
-        const pipeline = createAudioPipeline(remoteTrack);
-        // Respect deafen / per-peer volume on a (re)built P2P pipeline too —
-        // otherwise an SFU→P2P switch resets everyone to full volume and a
-        // deafened listener starts hearing audio again.
-        pipeline.gainNode.gain.value = effectiveGain(peerId);
-        peerAudiosRef.current.set(peerId, pipeline);
+        registry.attachP2pTrack(peerId, e.track);
       };
 
       p2pConnectionsRef.current.set(peerId, pc);
@@ -793,7 +640,7 @@ export function useMediasoup() {
 
       return pc;
     },
-    [ensureLocalStream, connectMicToGraph, ensureOutGraph, effectiveGain],
+    [ensureLocalStream, connectMicToGraph, ensureOutGraph, registry],
   );
 
   // Apply candidates that were queued for a peer while its connection had no
@@ -816,8 +663,8 @@ export function useMediasoup() {
     }
     p2pConnectionsRef.current.clear();
     pendingCandidatesRef.current.clear();
-    cleanupAllPeerAudio();
-  }, [cleanupAllPeerAudio]);
+    registry.cleanupAll();
+  }, [registry]);
 
   // --- SFU: tear down mediasoup transports ---
   const teardownSfu = useCallback(() => {
@@ -833,138 +680,15 @@ export function useMediasoup() {
     sendTransportRef.current = null;
     recvTransportRef.current?.close();
     recvTransportRef.current = null;
-    pendingProducersRef.current = [];
+    registry.clearPending();
     // Candidates queued here can only be trailing ones from a dead P2P epoch
     // (a new P2P session's candidates can't arrive before its offer) — drop
     // them so they never flush into a future session's connection.
     pendingCandidatesRef.current.clear();
-    cleanupAllPeerAudio();
-  }, [cleanupAllPeerAudio]);
+    registry.cleanupAll();
+  }, [registry]);
 
-  // --- SFU: consume a producer ---
-  const consumeProducer = useCallback(
-    async (peerId: string, producerId: string, source: string = "voice", title?: string) => {
-      const device = deviceRef.current;
-      const recvTransport = recvTransportRef.current;
-      if (!device || !recvTransport) {
-        // SFU setup is still in flight — queue it for the end of setupSfu
-        // (dropping it would permanently silence this producer for us).
-        pendingProducersRef.current.push({ peerId, producerId, source, title });
-        return;
-      }
-
-      const res = await emit<ConsumeResult>("consume", {
-        producerId,
-        rtpCapabilities: device.recvRtpCapabilities,
-      });
-
-      const consumer = await recvTransport.consume({
-        id: res.consumerId,
-        producerId: res.producerId,
-        kind: res.kind as "audio",
-        rtpParameters: res.rtpParameters as Parameters<
-          typeof recvTransport.consume
-        >[0]["rtpParameters"],
-      });
-
-      if ("playoutDelayHint" in consumer.track) {
-        (consumer.track as unknown as Record<string, number>).playoutDelayHint = 0;
-      }
-
-      const pipeline = createAudioPipeline(consumer.track);
-
-      // A "share" is a peer casting system/tab audio as a SEPARATE stereo
-      // producer. Represent it as its
-      // own "music stream" participant keyed by the producer id, so a peer that
-      // produces BOTH voice and a share never collides in the peer/audio maps.
-      // Stereo is preserved end-to-end by createAudioPipeline.
-      if (source === "share") {
-        const ownerName =
-          store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-        store
-          .getState()
-          .addPeer(
-            producerId,
-            title
-              ? share_stream_name_titled({ name: ownerName, title })
-              : share_stream_name({ name: ownerName }),
-          );
-        store.getState().setPeerMusic(producerId, true);
-        shareOwnersRef.current.set(producerId, peerId);
-        peerAudiosRef.current.set(producerId, { ...pipeline, consumer });
-        pipeline.gainNode.gain.value = effectiveGain(producerId);
-        return;
-      }
-
-      // A "file" is a peer streaming a local audio file as a SEPARATE stereo
-      // producer — same treatment as a share (its own music-stream tile keyed by
-      // producer id, ducks under voice), but tracked in its own owner map so a
-      // peer streaming a file AND sharing system audio keeps the two independent.
-      if (source === "file") {
-        const ownerName =
-          store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-        store
-          .getState()
-          .addPeer(
-            producerId,
-            title
-              ? file_stream_name_titled({ name: ownerName, title })
-              : file_stream_name({ name: ownerName }),
-          );
-        store.getState().setPeerMusic(producerId, true);
-        fileOwnersRef.current.set(producerId, peerId);
-        peerAudiosRef.current.set(producerId, { ...pipeline, consumer });
-        pipeline.gainNode.gain.value = effectiveGain(producerId);
-        return;
-      }
-
-      // A "mic" is a peer streaming an EXTRA input device as a SEPARATE producer
-      // alongside their voice — its own tile keyed by producerId (like share/file),
-      // but flagged isMicStream NOT isMusic: it's voice-like, so it's excluded from
-      // vote-to-kick yet is NOT ducked (ducking keys on isMusic). Tracked in its
-      // own owner map so a peer's voice + several mics never collide.
-      if (source === "mic") {
-        const ownerName =
-          store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-        store
-          .getState()
-          .addPeer(
-            producerId,
-            title
-              ? mic_stream_name_titled({ name: ownerName, title })
-              : mic_stream_name({ name: ownerName }),
-          );
-        store.getState().setPeerMicStream(producerId, true);
-        micStreamOwnersRef.current.set(producerId, peerId);
-        peerAudiosRef.current.set(producerId, { ...pipeline, consumer });
-        pipeline.gainNode.gain.value = effectiveGain(producerId);
-        return;
-      }
-
-      peerAudiosRef.current.set(peerId, { ...pipeline, consumer });
-
-      // Flag a music-caster peer (e.g. Ecobox) so the UI shows it as a media
-      // source. Stereo is preserved end-to-end by createAudioPipeline. The
-      // first time we learn this peer casts music, announce + log it — a
-      // re-consume (mode switch / reconnect) finds isMusic already set, so it
-      // never re-announces.
-      if (source === "music") {
-        if (!store.getState().peers.get(peerId)?.isMusic) {
-          const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-          store.getState().announceEvent(announce_music_started({ name }));
-        }
-        store.getState().setPeerMusic(peerId, true);
-        // Also flag it as an actual caster (a stricter flag than isMusic, which
-        // share/file tiles share) so the UI offers the immediate "Remove caster".
-        store.getState().setPeerCaster(peerId, true);
-      }
-
-      // Start at the correct gain: respects deafen, and ducks immediately if a
-      // voice is already active when this (music) producer joins.
-      pipeline.gainNode.gain.value = effectiveGain(peerId);
-    },
-    [emit, store, effectiveGain],
-  );
+  // SFU consume lives in PeerAudioRegistry (registry.consumeProducer).
 
   // Produce the shared system/tab audio as a SEPARATE stereo, hi-fi "share"
   // track (the router's 256 kbps ceiling lets it negotiate full quality).
@@ -1047,7 +771,7 @@ export function useMediasoup() {
   // track died (e.g. iOS killed it across a reconnect), or a mono↔stereo flip needs
   // a fresh capture with the new channelCount (it can't be changed on a live track).
   const ensureExtraMicGraph = useCallback(async (deviceId: string, stereo: boolean) => {
-    resumeSharedContext();
+    resumeContext(sharedAudioContext);
     const ctx = sharedAudioContext;
     const existing = extraMicsRef.current.get(deviceId);
     const liveTrack = existing?.stream.getAudioTracks()[0];
@@ -1255,47 +979,8 @@ export function useMediasoup() {
     runExtraMicOp,
   ]);
 
-  // Tear down an incoming peer's share "music stream" (they stopped, or left).
-  const removeShareStream = useCallback(
-    (producerId: string) => {
-      const pa = peerAudiosRef.current.get(producerId);
-      if (pa) {
-        destroyAudioPipeline(pa);
-        peerAudiosRef.current.delete(producerId);
-      }
-      shareOwnersRef.current.delete(producerId);
-      store.getState().removePeer(producerId);
-    },
-    [store],
-  );
-
-  // Tear down an incoming peer's file "music stream" (they stopped, or left).
-  const removeFileStream = useCallback(
-    (producerId: string) => {
-      const pa = peerAudiosRef.current.get(producerId);
-      if (pa) {
-        destroyAudioPipeline(pa);
-        peerAudiosRef.current.delete(producerId);
-      }
-      fileOwnersRef.current.delete(producerId);
-      store.getState().removePeer(producerId);
-    },
-    [store],
-  );
-
-  // Tear down an incoming peer's extra-mic stream (they unchecked it, or left).
-  const removeMicStream = useCallback(
-    (producerId: string) => {
-      const pa = peerAudiosRef.current.get(producerId);
-      if (pa) {
-        destroyAudioPipeline(pa);
-        peerAudiosRef.current.delete(producerId);
-      }
-      micStreamOwnersRef.current.delete(producerId);
-      store.getState().removePeer(producerId);
-    },
-    [store],
-  );
+  // Incoming share/file/mic "music stream" teardown lives in PeerAudioRegistry
+  // (registry.removeShareStream / removeFileStream / removeMicStream).
 
   // --- SFU: set up transports and produce ---
   const setupSfuInner = useCallback(
@@ -1414,17 +1099,7 @@ export function useMediasoup() {
 
       // Consume any producers announced while the transports were still being
       // built (their new-producer events arrived too early and were queued).
-      while (pendingProducersRef.current.length > 0) {
-        const pending = pendingProducersRef.current.shift()!;
-        await consumeProducer(
-          pending.peerId,
-          pending.producerId,
-          pending.source,
-          pending.title,
-        ).catch((err) => {
-          console.error("[sfu] queued consume failed:", err);
-        });
-      }
+      await registry.drainPending();
     },
     [
       emit,
@@ -1434,7 +1109,7 @@ export function useMediasoup() {
       produceShare,
       produceFile,
       produceAllExtraMics,
-      consumeProducer,
+      registry,
       store,
     ],
   );
@@ -1587,7 +1262,7 @@ export function useMediasoup() {
         // being talked over starts ducked instead of blasting at full volume
         // until the next talk-start/stop transition. Likewise seed the room-wide
         // ducking toggle so effectiveGain is correct as producers are consumed.
-        isVoiceActiveRef.current = !!joinRes.voiceActive;
+        registry.isVoiceActive = !!joinRes.voiceActive;
         store.getState().setDuckingEnabled(joinRes.duckingEnabled ?? true);
 
         // Seed chat history (de-duped in the store, silent — no chime/announce).
@@ -1629,7 +1304,7 @@ export function useMediasoup() {
         // Producers queued before this ack (stale modeRef during a rejoin) are
         // all covered by the join snapshot below — draining them too would
         // consume them twice and double that peer's audio.
-        pendingProducersRef.current = [];
+        registry.clearPending();
 
         if (joinRes.mode === "p2p") {
           // P2P: we're the newcomer, so we offer to every existing peer (they
@@ -1642,7 +1317,7 @@ export function useMediasoup() {
           await setupSfu(joinRes.rtpCapabilities);
           for (const peer of joinRes.peers) {
             for (const prod of peer.producers) {
-              await consumeProducer(peer.peerId, prod.producerId, prod.source, prod.title);
+              await registry.consumeProducer(peer.peerId, prod.producerId, prod.source, prod.title);
             }
           }
         }
@@ -1750,23 +1425,10 @@ export function useMediasoup() {
           p2pConnectionsRef.current.delete(peerId);
         }
         pendingCandidatesRef.current.delete(peerId);
-        // Clean up audio
-        const peerAudio = peerAudiosRef.current.get(peerId);
-        if (peerAudio) {
-          destroyAudioPipeline(peerAudio);
-          peerAudiosRef.current.delete(peerId);
-        }
-        // Drop any share / file "music stream" tiles this peer owned (they may
-        // have left mid-share/-stream, without a stop event first).
-        for (const [producerId, owner] of shareOwnersRef.current) {
-          if (owner === peerId) removeShareStream(producerId);
-        }
-        for (const [producerId, owner] of fileOwnersRef.current) {
-          if (owner === peerId) removeFileStream(producerId);
-        }
-        for (const [producerId, owner] of micStreamOwnersRef.current) {
-          if (owner === peerId) removeMicStream(producerId);
-        }
+        // Clean up the peer's audio: its voice/music pipeline plus any share /
+        // file / extra-mic tiles it owned (it may have left mid-stream, without a
+        // stop event first).
+        registry.removePeerAudio(peerId);
         store.getState().removePeer(peerId);
         if (wasMusic) {
           // A music caster (e.g. Ecobox) going away reads as the music
@@ -1846,20 +1508,8 @@ export function useMediasoup() {
             p2pConnectionsRef.current.delete(peerId);
           }
           pendingCandidatesRef.current.delete(peerId);
-          const peerAudio = peerAudiosRef.current.get(peerId);
-          if (peerAudio) {
-            destroyAudioPipeline(peerAudio);
-            peerAudiosRef.current.delete(peerId);
-          }
-          for (const [producerId, owner] of shareOwnersRef.current) {
-            if (owner === peerId) removeShareStream(producerId);
-          }
-          for (const [producerId, owner] of fileOwnersRef.current) {
-            if (owner === peerId) removeFileStream(producerId);
-          }
-          for (const [producerId, owner] of micStreamOwnersRef.current) {
-            if (owner === peerId) removeMicStream(producerId);
-          }
+          // Tear down their media exactly like a leave.
+          registry.removePeerAudio(peerId);
           store.getState().removePeer(peerId);
           store
             .getState()
@@ -2064,7 +1714,7 @@ export function useMediasoup() {
         }) => {
           if (modeRef.current !== "sfu") return;
           try {
-            await consumeProducer(peerId, producerId, source ?? "voice", title);
+            await registry.consumeProducer(peerId, producerId, source ?? "voice", title);
           } catch (err) {
             console.error("[sfu] consume failed:", err);
           }
@@ -2073,7 +1723,7 @@ export function useMediasoup() {
 
       // Auto-ducking: server says whether anyone is talking right now.
       socket.on("duck", ({ active }: { active: boolean }) => {
-        applyDuck(active);
+        registry.applyDuck(active);
       });
 
       // Room-wide ducking toggle changed (by anyone). Reflect it, re-ramp every
@@ -2083,7 +1733,7 @@ export function useMediasoup() {
       socket.on("ducking-changed", ({ enabled, by }: { enabled: boolean; by?: string }) => {
         if (store.getState().duckingEnabled === enabled) return;
         store.getState().setDuckingEnabled(enabled);
-        rampMusicGains();
+        registry.rampMusicGains();
         const name = by ?? announce_a_participant();
         // Coalesced so mashing the ducking toggle doesn't spam the whole room's
         // chat log (the gain change above still applies on every flip).
@@ -2111,9 +1761,7 @@ export function useMediasoup() {
       socket.on(
         "share-stopped",
         ({ peerId, displayName: name }: { peerId: string; displayName: string }) => {
-          for (const [producerId, owner] of shareOwnersRef.current) {
-            if (owner === peerId) removeShareStream(producerId);
-          }
+          registry.removeSharesOwnedBy(peerId);
           store.getState().announceEvent(announce_share_stopped({ name }));
           playCue(sharedAudioContext, "share-stop");
         },
@@ -2131,9 +1779,7 @@ export function useMediasoup() {
       socket.on(
         "file-stream-stopped",
         ({ peerId, displayName: name }: { peerId: string; displayName: string }) => {
-          for (const [producerId, owner] of fileOwnersRef.current) {
-            if (owner === peerId) removeFileStream(producerId);
-          }
+          registry.removeFilesOwnedBy(peerId);
           store.getState().announceEvent(announce_file_stream_stopped({ name }));
           playCue(sharedAudioContext, "share-stop");
         },
@@ -2180,9 +1826,9 @@ export function useMediasoup() {
             playCue(sharedAudioContext, "share-stop");
             return;
           }
-          if (source === "share") removeShareStream(producerId);
-          else if (source === "file") removeFileStream(producerId);
-          else removeMicStream(producerId);
+          if (source === "share") registry.removeShareStream(producerId);
+          else if (source === "file") registry.removeFileStream(producerId);
+          else registry.removeMicStream(producerId);
           const name =
             store.getState().peers.get(ownerId)?.displayName ?? announce_a_participant();
           store.getState().announceEvent(announce_peer_stream_stopped({ name }));
@@ -2197,19 +1843,16 @@ export function useMediasoup() {
       socket.on(
         "producer-title-updated",
         ({ producerId, title }: { producerId: string; title?: string }) => {
-          const ownerId =
-            fileOwnersRef.current.get(producerId) ??
-            shareOwnersRef.current.get(producerId) ??
-            micStreamOwnersRef.current.get(producerId);
-          if (!ownerId) return;
+          const owner = registry.streamOwner(producerId);
+          if (!owner) return;
           const ownerName =
-            store.getState().peers.get(ownerId)?.displayName ?? announce_a_participant();
+            store.getState().peers.get(owner.ownerId)?.displayName ?? announce_a_participant();
           let name: string;
-          if (fileOwnersRef.current.has(producerId))
+          if (owner.kind === "file")
             name = title
               ? file_stream_name_titled({ name: ownerName, title })
               : file_stream_name({ name: ownerName });
-          else if (shareOwnersRef.current.has(producerId))
+          else if (owner.kind === "share")
             name = title
               ? share_stream_name_titled({ name: ownerName, title })
               : share_stream_name({ name: ownerName });
@@ -2244,7 +1887,7 @@ export function useMediasoup() {
           displayName: string;
           last: boolean;
         }) => {
-          removeMicStream(producerId);
+          registry.removeMicStream(producerId);
           if (last) {
             store.getState().announceEvent(announce_extra_mic_stopped({ name }));
             playCue(sharedAudioContext, "share-stop");
@@ -2304,19 +1947,14 @@ export function useMediasoup() {
     },
     [
       emit,
-      consumeProducer,
+      registry,
       setupSfu,
       createP2pConnection,
       connectMicToGraph,
       ensureOutGraph,
       teardownP2p,
       teardownSfu,
-      applyDuck,
-      rampMusicGains,
       surfaceToggle,
-      removeShareStream,
-      removeFileStream,
-      removeMicStream,
       runTransition,
       flushPendingCandidates,
       store,
@@ -2366,11 +2004,8 @@ export function useMediasoup() {
     store.getState().setDeafened(!store.getState().isDeafened);
     // Recompute every peer's gain so un-deafen restores per-peer volume (and
     // any active music duck) instead of resetting everyone to 1.
-    const now = sharedAudioContext.currentTime;
-    for (const [peerId, peerAudio] of peerAudiosRef.current) {
-      peerAudio.gainNode.gain.setTargetAtTime(effectiveGain(peerId), now, GAIN_RAMP);
-    }
-  }, [store, effectiveGain]);
+    registry.rampAll();
+  }, [store, registry]);
 
   // Flip the room-wide auto-ducking toggle. Fire-and-forget: the server echoes
   // `ducking-changed` to everyone (us included), which is what applies it.
@@ -2381,16 +2016,9 @@ export function useMediasoup() {
   const setPeerVolume = useCallback(
     (peerId: string, volume: number) => {
       store.getState().setPeerVolume(peerId, volume);
-      const peerAudio = peerAudiosRef.current.get(peerId);
-      if (peerAudio) {
-        peerAudio.gainNode.gain.setTargetAtTime(
-          effectiveGain(peerId),
-          sharedAudioContext.currentTime,
-          GAIN_RAMP,
-        );
-      }
+      registry.rampPeer(peerId);
     },
-    [store, effectiveGain],
+    [store, registry],
   );
 
   // Local (listener-side) mute of one peer/stream: pure client-side, ramps that
@@ -2398,16 +2026,9 @@ export function useMediasoup() {
   const setPeerLocalMute = useCallback(
     (peerId: string, muted: boolean) => {
       store.getState().setPeerLocalMute(peerId, muted);
-      const peerAudio = peerAudiosRef.current.get(peerId);
-      if (peerAudio) {
-        peerAudio.gainNode.gain.setTargetAtTime(
-          effectiveGain(peerId),
-          sharedAudioContext.currentTime,
-          GAIN_RAMP,
-        );
-      }
+      registry.rampPeer(peerId);
     },
-    [store, effectiveGain],
+    [store, registry],
   );
 
   // --- Audio share: cast system/tab audio as a SEPARATE stereo producer ---
@@ -2582,7 +2203,7 @@ export function useMediasoup() {
   const startFileSource = useCallback(
     async (src: string, name: string, objectUrl?: string) => {
       const g = ensureOutGraph();
-      resumeSharedContext();
+      resumeContext(sharedAudioContext);
 
       const firstStart = store.getState().fileStreamName == null;
 
@@ -2884,9 +2505,8 @@ export function useMediasoup() {
     extraMicsRef.current.clear();
     musicProducerRef.current = null;
     fileProducerRef.current = null;
-    shareOwnersRef.current.clear();
-    fileOwnersRef.current.clear();
-    micStreamOwnersRef.current.clear();
+    // Incoming-stream owner maps are owned by PeerAudioRegistry and already
+    // cleared by registry.cleanupAll() (via teardownP2p/teardownSfu above).
     // Cancel any pending coalesced mute/duck announcements.
     for (const s of surfaceRef.current.values()) {
       if (s.timer !== null) clearTimeout(s.timer);
