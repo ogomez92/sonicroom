@@ -6,25 +6,15 @@ import { forceOpusParams } from "../lib/sdp-munger";
 import { applySpeakerToContext } from "../lib/audio-devices";
 import { microphoneConstraints } from "../lib/microphone";
 import { playCue, startKnockLoop } from "../lib/sounds";
-import { formatMessage, RateLimiter, META_SEP, type ChatMessage } from "../lib/chat";
+import { RateLimiter, type ChatMessage } from "../lib/chat";
 import {
   announce_joined,
   announce_left,
   announce_music_stopped,
-  announce_chat_hint,
   announce_a_participant,
-  announce_recording_started,
-  announce_recording_stopped,
-  announce_recording_unavailable,
   announce_recording_failed,
-  announce_streaming_started,
-  announce_streaming_stopped,
-  announce_streaming_failed,
-  announce_streaming_failed_reason,
   announce_mic_muted,
   announce_mic_unmuted,
-  announce_peer_muted,
-  announce_peer_unmuted,
   announce_share_started,
   announce_share_stopped,
   announce_share_started_you,
@@ -63,6 +53,13 @@ import { PeerAudioRegistry } from "../lib/audio/peer-audio-registry";
 import { OutgoingAudioGraph } from "../lib/audio/outgoing-graph";
 import { SpeakingDetector } from "../lib/audio/speaking-detector";
 import { ExtraMicController } from "../lib/media/extra-mic-controller";
+import { teardownPeerMedia } from "../lib/socket/peer-teardown";
+import {
+  registerRecordingHandlers,
+  registerStreamingHandlers,
+  registerMuteHandlers,
+  registerChatHandlers,
+} from "../lib/socket/room-event-handlers";
 import { sharedAudioContext, resumeContext } from "../lib/audio/shared-context";
 
 // ICE servers (with optional per-instance overrides) live in runtime-config.ts —
@@ -957,17 +954,13 @@ export function useMediasoup() {
       socket.on("peer-left", ({ peerId }: { peerId: string }) => {
         const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
         const wasMusic = !!store.getState().peers.get(peerId)?.isMusic;
-        // Clean up P2P connection if any
-        const pc = p2pConnectionsRef.current.get(peerId);
-        if (pc) {
-          pc.close();
-          p2pConnectionsRef.current.delete(peerId);
-        }
-        pendingCandidatesRef.current.delete(peerId);
-        // Clean up the peer's audio: its voice/music pipeline plus any share /
-        // file / extra-mic tiles it owned (it may have left mid-stream, without a
-        // stop event first).
-        registry.removePeerAudio(peerId);
+        // Close their P2P connection, drop queued candidates, and tear down all
+        // their incoming audio (they may have left mid-stream without a stop event).
+        teardownPeerMedia(peerId, {
+          p2pConnections: p2pConnectionsRef.current,
+          pendingCandidates: pendingCandidatesRef.current,
+          registry,
+        });
         store.getState().removePeer(peerId);
         if (wasMusic) {
           // A music caster (e.g. Ecobox) going away reads as the music
@@ -1041,14 +1034,12 @@ export function useMediasoup() {
           reason?: "vote" | "caster";
         }) => {
           const name = store.getState().peers.get(peerId)?.displayName ?? displayName;
-          const pc = p2pConnectionsRef.current.get(peerId);
-          if (pc) {
-            pc.close();
-            p2pConnectionsRef.current.delete(peerId);
-          }
-          pendingCandidatesRef.current.delete(peerId);
           // Tear down their media exactly like a leave.
-          registry.removePeerAudio(peerId);
+          teardownPeerMedia(peerId, {
+            p2pConnections: p2pConnectionsRef.current,
+            pendingCandidates: pendingCandidatesRef.current,
+            registry,
+          });
           store.getState().removePeer(peerId);
           store
             .getState()
@@ -1068,54 +1059,10 @@ export function useMediasoup() {
         socket.disconnect();
       });
 
-      // --- Recording (room-wide; the server forces SFU while recording) ---
-      socket.on("recording-started", ({ recordingId, by }: { recordingId: string; by: string }) => {
-        // Two near-simultaneous starts can broadcast this twice for the same
-        // recording — announce it only once.
-        const s = store.getState();
-        if (s.isRecording && s.recordingId === recordingId) return;
-        s.setRecording(true, recordingId);
-        s.announceEvent(announce_recording_started({ name: by }));
-      });
-
-      socket.on("recording-stopped", () => {
-        // Keep recordingId so the download link stays available after stopping.
-        store.getState().setRecording(false);
-        store.getState().announceEvent(announce_recording_stopped());
-      });
-
-      // The finished recording was cleaned up server-side (TTL) — drop the link.
-      socket.on("recording-expired", () => {
-        store.getState().setRecording(false, null);
-        store.getState().announceEvent(announce_recording_unavailable());
-      });
-
-      // --- Live streaming (room-wide; the server forces SFU while streaming) ---
-      socket.on("streaming-started", ({ by }: { by: string }) => {
-        const s = store.getState();
-        if (s.isStreaming) return; // de-dupe near-simultaneous starts
-        s.setStreaming(true);
-        s.announceEvent(announce_streaming_started({ name: by }));
-      });
-
-      socket.on("streaming-stopped", () => {
-        if (!store.getState().isStreaming) return;
-        store.getState().setStreaming(false);
-        store.getState().announceEvent(announce_streaming_stopped());
-      });
-
-      // The server's mixer died on its own (bad Icecast target, unreachable, …).
-      // `error` is the server's already-classified, human-readable reason — keep
-      // it so the Streaming panel can show what to fix, and read it aloud.
-      socket.on("streaming-failed", ({ error }: { error?: string } = {}) => {
-        const s = store.getState();
-        s.setStreaming(false);
-        const reason = error?.trim() || "";
-        s.setStreamError(reason || null);
-        s.announceEvent(
-          reason ? announce_streaming_failed_reason({ reason }) : announce_streaming_failed(),
-        );
-      });
+      // Recording + live streaming state-sync handlers (room-wide; both force SFU
+      // server-side). Self-contained — see lib/socket/room-event-handlers.ts.
+      registerRecordingHandlers(socket);
+      registerStreamingHandlers(socket);
 
       // P2P signaling relay
       socket.on(
@@ -1428,46 +1375,9 @@ export function useMediasoup() {
         },
       );
 
-      // A remote peer toggled their mic: reflect it, play a soft cue, and speak
-      // it on the polite ARIA region. Unlike other room events this is NOT
-      // logged to chat (announce, not announceEvent) — it'd be too noisy.
-      socket.on("peer-muted", ({ peerId }: { peerId: string }) => {
-        store.getState().setPeerMuted(peerId, true);
-        // Coalesced per peer so a peer mashing their mic only blips us once or
-        // twice, not on every flip (see surfaceToggle).
-        surfaceToggle(`peer:${peerId}`, true, () => {
-          const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-          store.getState().announce(announce_peer_muted({ name }));
-          playCue(sharedAudioContext, "peer-mute");
-        });
-      });
-
-      socket.on("peer-unmuted", ({ peerId }: { peerId: string }) => {
-        store.getState().setPeerMuted(peerId, false);
-        surfaceToggle(`peer:${peerId}`, false, () => {
-          const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-          store.getState().announce(announce_peer_unmuted({ name }));
-          playCue(sharedAudioContext, "peer-unmute");
-        });
-      });
-
-      // Incoming chat (including the echo of our own messages): render it, chime
-      // a distinct cue, and announce it via the user's chosen channel — a polite
-      // or assertive ARIA live region, or the browser's spoken TTS (announceChat
-      // reads chatAnnounceMode). Both sent and received messages flow through
-      // here (own messages come back as an echo), so both get announced.
-      socket.on("chat-message", (msg: ChatMessage) => {
-        store.getState().addMessage(msg);
-        let announcement = formatMessage(msg, Date.now());
-        // First message of the session: tell SR users once that Alt+1..0 reads
-        // the recent messages aloud even while the chat panel is closed.
-        if (!chatHintGivenRef.current) {
-          chatHintGivenRef.current = true;
-          announcement += `${META_SEP}${announce_chat_hint()}`;
-        }
-        store.getState().announceChat(announcement);
-        playCue(sharedAudioContext, "message");
-      });
+      // Remote mute/unmute + incoming chat handlers. See room-event-handlers.ts.
+      registerMuteHandlers(socket, surfaceToggle);
+      registerChatHandlers(socket, chatHintGivenRef);
 
       // Resolve once the first connect → join → media setup has completed (or
       // reject if that initial join fails), so callers can flip to "joined".
