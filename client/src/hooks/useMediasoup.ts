@@ -64,7 +64,8 @@ import {
 import { useRoomStore, type RoomMode, type JoinRequest } from "../stores/room";
 import { apiUrl, iceServers, socketTarget } from "../lib/runtime-config";
 import { PeerAudioRegistry } from "../lib/audio/peer-audio-registry";
-import { sharedAudioContext, resumeContext, GAIN_RAMP } from "../lib/audio/shared-context";
+import { OutgoingAudioGraph } from "../lib/audio/outgoing-graph";
+import { sharedAudioContext, resumeContext } from "../lib/audio/shared-context";
 
 // ICE servers (with optional per-instance overrides) live in runtime-config.ts —
 // `iceServers()` returns the default coturn list on the web and whatever the
@@ -97,11 +98,6 @@ const SPEAKER_BADGE_MS = 3000;
 // state once more after TOGGLE_DEDUP_MS of quiet — and only if it actually
 // differs from what was last surfaced. So a mash shows at most the first + last.
 const TOGGLE_DEDUP_MS = 1000;
-
-// Soft limiter sitting after the outgoing mic gain so boosting a quiet/cheap
-// mic doesn't clip: transparent until peaks approach 0 dBFS, then ~20:1 with a
-// fast attack. Adds ~5 ms of look-ahead latency, negligible for voice.
-const MIC_LIMITER = { threshold: -3, knee: 0, ratio: 20, attack: 0.003, release: 0.25 };
 
 // resumeContext (the keep-alive) lives in lib/audio/shared-context.ts and is
 // already wired to the document gestures / statechange / visibility there.
@@ -169,41 +165,10 @@ export function useMediasoup() {
   // building up before the next starts — overlapping async handlers could
   // otherwise re-add stale connections after a newer teardown already ran.
   const transitionChainRef = useRef<Promise<void>>(Promise.resolve());
-  // Outgoing audio graph: mic → micGain → limiter → outDest → outgoing track.
-  // The track added to peers / produced to the SFU is always outDest's, so the
-  // mic slider just rides `micGain` and shared system audio is mixed straight
-  // into `outDest` (bypassing the gain/limiter so the music keeps its dynamics).
-  const outGraphRef = useRef<{
-    micSource: MediaStreamAudioSourceNode | null;
-    micGain: GainNode;
-    limiter: DynamicsCompressorNode;
-    outDest: MediaStreamAudioDestinationNode;
-    displaySource: MediaStreamAudioSourceNode | null;
-    // Shared system/tab audio gets its OWN destination so it is produced as a
-    // separate high-bitrate stereo "share" track.
-    shareDest: MediaStreamAudioDestinationNode | null;
-    // A streamed local file gets its OWN destination too, so it's produced as a
-    // separate stereo "file" track, independent of voice AND of any share. The
-    // <audio> element feeding it is swapped (replace file) without touching this
-    // destination or its producer.
-    fileSource: MediaElementAudioSourceNode | null;
-    fileDest: MediaStreamAudioDestinationNode | null;
-    // Local-only monitor gain for the file stream: the <audio> source feeds the
-    // speakers THROUGH this node (source → fileMonitorGain → destination), so the
-    // streamer can set how loud the stream is FOR THEM without touching fileDest
-    // (the full-level track everyone else hears). Persists across file swaps.
-    fileMonitorGain: GainNode | null;
-    micStream: MediaStream | null;
-  } | null>(null);
-  // Audio share (system / tab audio produced as its own stereo "share" track)
-  const displayStreamRef = useRef<MediaStream | null>(null);
-  // The local stereo "share" producer (SFU), separate from the voice producer.
-  const musicProducerRef = useRef<Producer | null>(null);
-  // Local file streaming (independent of the audio share above): the stereo
-  // "file" producer (SFU), the <audio> element decoding the file, its object
-  // URL, the Web Audio source node, and an AbortController for the element's
-  // ended/error listeners (so swapping the file never fires a stale handler).
-  const fileProducerRef = useRef<Producer | null>(null);
+  // The outgoing audio graph + the share/file producers live in OutgoingAudioGraph
+  // (constructed below). The hook keeps only the <audio> element streaming a local
+  // file: the element decoding it, its object URL, and an AbortController for the
+  // element's ended/error listeners (so swapping the file never fires a stale one).
   const fileAudioRef = useRef<HTMLAudioElement | null>(null);
   const fileObjectUrlRef = useRef<string | null>(null);
   const fileAbortRef = useRef<AbortController | null>(null);
@@ -308,6 +273,18 @@ export function useMediasoup() {
     }),
   );
   const registry = registryRef.current;
+
+  // Outgoing audio: the mic → micGain → limiter → outDest graph plus the separate
+  // stereo "share" and "file" producers. Constructed once; reads the live SFU
+  // send transport / device through getters. The hook keeps the DOM/socket
+  // orchestration (getDisplayMedia, the <audio> element, emits, cues).
+  const graphRef = useRef(
+    new OutgoingAudioGraph(sharedAudioContext, store, {
+      getSendTransport: () => sendTransportRef.current,
+      getDevice: () => deviceRef.current,
+    }),
+  );
+  const graph = graphRef.current;
   // The registry owns the live map; expose it by stable reference (never reassigned)
   // so the returned ref and the speaking detector read the same Map it mutates.
   const peerAudiosRef = useRef(registry.peerAudios);
@@ -439,54 +416,10 @@ export function useMediasoup() {
     }, SPEAKER_BADGE_MS);
   }, [store]);
 
-  // --- Outgoing audio graph (mic gain + soft limiter, + optional shared audio) ---
-  // Built lazily and reused for the whole session. The produced/added track is
-  // always `outDest`'s, so we never have to swap tracks on senders/producer.
-  const ensureOutGraph = useCallback(() => {
-    if (outGraphRef.current) return outGraphRef.current;
-    // The mic now flows through the shared context, so it must be running
-    // (it starts suspended on iOS until a user gesture).
-    resumeContext(sharedAudioContext);
-    const ctx = sharedAudioContext;
-    const micGain = ctx.createGain();
-    micGain.gain.value = store.getState().micGain;
-    const limiter = ctx.createDynamicsCompressor();
-    limiter.threshold.value = MIC_LIMITER.threshold;
-    limiter.knee.value = MIC_LIMITER.knee;
-    limiter.ratio.value = MIC_LIMITER.ratio;
-    limiter.attack.value = MIC_LIMITER.attack;
-    limiter.release.value = MIC_LIMITER.release;
-    const outDest = ctx.createMediaStreamDestination();
-    micGain.connect(limiter);
-    limiter.connect(outDest);
-    outGraphRef.current = {
-      micSource: null,
-      micGain,
-      limiter,
-      outDest,
-      displaySource: null,
-      shareDest: null,
-      fileSource: null,
-      fileDest: null,
-      fileMonitorGain: null,
-      micStream: null,
-    };
-    return outGraphRef.current;
-  }, [store]);
-
-  // (Re)route the raw mic into the outgoing graph. Idempotent for a given
-  // stream; re-runs when the mic is re-acquired (track died / device change).
-  const connectMicToGraph = useCallback(
-    (stream: MediaStream) => {
-      const g = ensureOutGraph();
-      if (g.micStream === stream && g.micSource) return;
-      g.micSource?.disconnect();
-      g.micSource = sharedAudioContext.createMediaStreamSource(stream);
-      g.micSource.connect(g.micGain);
-      g.micStream = stream;
-    },
-    [ensureOutGraph],
-  );
+  // The outgoing audio graph (mic gain + soft limiter + the share/file producers)
+  // lives in OutgoingAudioGraph. `connectMicToGraph` is a thin stable delegator so
+  // the effects that depend on it keep a stable identity.
+  const connectMicToGraph = useCallback((stream: MediaStream) => graph.connectMic(stream), [graph]);
 
   // --- Device selection (set in the lobby or via the in-call settings) ---
   const micDeviceId = useRoomStore((s) => s.micDeviceId);
@@ -602,8 +535,8 @@ export function useMediasoup() {
 
       // Send the processed outgoing track (mic gain + limiter, + shared audio),
       // not the raw mic.
-      const g = ensureOutGraph();
-      pc.addTrack(g.outDest.stream.getAudioTracks()[0], g.outDest.stream);
+      graph.ensure();
+      pc.addTrack(graph.outTrack, graph.outStream);
 
       // ICE candidates → relay via server
       pc.onicecandidate = (e) => {
@@ -640,7 +573,7 @@ export function useMediasoup() {
 
       return pc;
     },
-    [ensureLocalStream, connectMicToGraph, ensureOutGraph, registry],
+    [ensureLocalStream, connectMicToGraph, graph, registry],
   );
 
   // Apply candidates that were queued for a peer while its connection had no
@@ -670,12 +603,9 @@ export function useMediasoup() {
   const teardownSfu = useCallback(() => {
     producerRef.current?.close();
     producerRef.current = null;
-    musicProducerRef.current?.close();
-    musicProducerRef.current = null;
-    // The file producer is rebuilt by setupSfuInner if a file stream is still
-    // active; closing with stopTracks:false keeps fileDest's track alive.
-    fileProducerRef.current?.close();
-    fileProducerRef.current = null;
+    // Close the share + file producers (rebuilt by setupSfuInner if still active;
+    // stopTracks:false keeps their dest tracks alive for the re-produce).
+    graph.closeProducers();
     sendTransportRef.current?.close();
     sendTransportRef.current = null;
     recvTransportRef.current?.close();
@@ -686,78 +616,13 @@ export function useMediasoup() {
     // them so they never flush into a future session's connection.
     pendingCandidatesRef.current.clear();
     registry.cleanupAll();
-  }, [registry]);
+  }, [registry, graph]);
 
   // SFU consume lives in PeerAudioRegistry (registry.consumeProducer).
 
   // Produce the shared system/tab audio as a SEPARATE stereo, hi-fi "share"
-  // track (the router's 256 kbps ceiling lets it negotiate full quality).
-  // SFU-only — an active share forces the room onto the SFU server-side.
-  // Idempotent.
-  const produceShare = useCallback(async () => {
-    const sendTransport = sendTransportRef.current;
-    const device = deviceRef.current;
-    const g = outGraphRef.current;
-    if (!sendTransport || !device || !g?.shareDest) return;
-    if (musicProducerRef.current && !musicProducerRef.current.closed) return;
-    const track = g.shareDest.stream.getAudioTracks()[0];
-    if (!track) return;
-    // The display-capture track names what's being shared (e.g. "System Audio" /
-    // "Tab audio"), so other peers' tiles read "Tyler's shared audio: …".
-    const shareLabel = displayStreamRef.current?.getAudioTracks()[0]?.label || undefined;
-    musicProducerRef.current = await sendTransport.produce({
-      track,
-      codecOptions: {
-        opusStereo: true,
-        opusDtx: false,
-        opusFec: true,
-        opusMaxPlaybackRate: 48000,
-        opusMaxAverageBitrate: 256000,
-      },
-      codec: device.recvRtpCapabilities.codecs?.find(
-        (c) => c.mimeType.toLowerCase() === "audio/opus",
-      ),
-      appData: { source: "share", title: shareLabel },
-      // shareDest is an app-owned, long-lived Web Audio track reused across the
-      // session; mediasoup-client must NOT stop it when this producer closes
-      // (default stopTracks:true would kill it, so a later re-produce sends a
-      // dead track and no RTP flows).
-      stopTracks: false,
-    });
-  }, []);
-
-  // Produce the streamed local file as a SEPARATE stereo, hi-fi "file" track
-  // (mirrors produceShare — the 256 kbps ceiling lets it negotiate full
-  // quality). Independent of the share producer. SFU-only; idempotent.
-  const produceFile = useCallback(async () => {
-    const sendTransport = sendTransportRef.current;
-    const device = deviceRef.current;
-    const g = outGraphRef.current;
-    if (!sendTransport || !device || !g?.fileDest) return;
-    if (fileProducerRef.current && !fileProducerRef.current.closed) return;
-    const track = g.fileDest.stream.getAudioTracks()[0];
-    if (!track) return;
-    fileProducerRef.current = await sendTransport.produce({
-      track,
-      codecOptions: {
-        opusStereo: true,
-        opusDtx: false,
-        opusFec: true,
-        opusMaxPlaybackRate: 48000,
-        opusMaxAverageBitrate: 256000,
-      },
-      codec: device.recvRtpCapabilities.codecs?.find(
-        (c) => c.mimeType.toLowerCase() === "audio/opus",
-      ),
-      // The file name / URL last segment, so other peers' tiles read e.g.
-      // "Tyler's file: song.mp3" instead of a bare "Tyler's file".
-      appData: { source: "file", title: store.getState().fileStreamName ?? undefined },
-      // fileDest is an app-owned, long-lived Web Audio track reused across the
-      // session and rebuilt-on-reconnect produces; mediasoup-client must NOT
-      // stop it when this producer closes (see produceShare).
-      stopTracks: false,
-    });
-  }, [store]);
+  // The separate stereo "share" and "file" producers live in OutgoingAudioGraph
+  // (graph.produceShare / graph.produceFile).
 
   // --- Extra microphones: stream additional input devices as separate "mic"
   // producers (one per device), in addition to the primary voice mic. Each is
@@ -1069,8 +934,9 @@ export function useMediasoup() {
       // Voice is mono ~64k by default; the per-user hi-fi opt-in sends stereo
       // 128k (read at produce time, so it takes effect on the next call).
       const hifiVoice = store.getState().hifiVoiceEnabled;
+      graph.ensure();
       const producer = await sendTransport.produce({
-        track: ensureOutGraph().outDest.stream.getAudioTracks()[0],
+        track: graph.outTrack,
         codecOptions: {
           opusStereo: hifiVoice,
           opusDtx: false,
@@ -1091,9 +957,9 @@ export function useMediasoup() {
 
       // If we were already sharing audio (a mode switch into SFU, or a
       // reconnect mid-share), rebuild the separate stereo share producer too.
-      if (store.getState().isSharingAudio) await produceShare();
+      if (store.getState().isSharingAudio) await graph.produceShare();
       // Likewise rebuild the file producer if a local file stream is active.
-      if (store.getState().fileStreamName) await produceFile();
+      if (store.getState().fileStreamName) await graph.produceFile();
       // Likewise rebuild any selected extra-mic producers.
       if (store.getState().streamedMicDeviceIds.length > 0) await produceAllExtraMics();
 
@@ -1105,9 +971,7 @@ export function useMediasoup() {
       emit,
       connectMicToGraph,
       ensureLocalStream,
-      ensureOutGraph,
-      produceShare,
-      produceFile,
+      graph,
       produceAllExtraMics,
       registry,
       store,
@@ -1171,7 +1035,7 @@ export function useMediasoup() {
         // the mute control + mic slider, shows a "text only" indicator).
         noMicRef.current = true;
         localStreamRef.current = null;
-        ensureOutGraph();
+        graph.ensure();
         store.getState().setHasMic(false);
         store.getState().setMuted(true);
       }
@@ -1951,7 +1815,7 @@ export function useMediasoup() {
       setupSfu,
       createP2pConnection,
       connectMicToGraph,
-      ensureOutGraph,
+      graph,
       teardownP2p,
       teardownSfu,
       surfaceToggle,
@@ -2032,43 +1896,20 @@ export function useMediasoup() {
   );
 
   // --- Audio share: cast system/tab audio as a SEPARATE stereo producer ---
-  // The shared audio gets its own destination (shareDest) and its own stereo
-  // "share" producer, so the voice track is never touched.
-  const detachSharedAudio = useCallback(() => {
-    const g = outGraphRef.current;
-    g?.displaySource?.disconnect();
-    g?.shareDest?.disconnect();
-    if (g) {
-      g.displaySource = null;
-      g.shareDest = null;
-    }
-    displayStreamRef.current?.getTracks().forEach((t) => t.stop());
-    displayStreamRef.current = null;
-  }, []);
-
-  // Local-only teardown of OUR share: close the producer, detach the nodes, clear
-  // the flag. No server emit, no announcement — shared by the user-initiated stop
-  // (below) and the "someone stopped my stream" path (peer-stream-stopped), which
-  // must NOT re-tell the server (it already closed the producer).
-  const teardownShareLocal = useCallback(() => {
-    if (musicProducerRef.current) {
-      if (!musicProducerRef.current.closed) musicProducerRef.current.close();
-      musicProducerRef.current = null;
-    }
-    detachSharedAudio();
-    store.getState().setSharingAudio(false);
-  }, [store, detachSharedAudio]);
-
+  // The shared audio gets its own destination + stereo "share" producer (owned by
+  // OutgoingAudioGraph), so the voice track is never touched. graph.teardownShareLocal
+  // does the node/producer/flag teardown (no emit) — shared by the user-initiated
+  // stop and the "someone stopped my stream" path.
   const stopAudioShare = useCallback(async () => {
     if (!store.getState().isSharingAudio) return;
-    teardownShareLocal();
+    graph.teardownShareLocal();
     // Tell the server: drop us from the sharer set (may release the SFU pin)
     // and close the server-side producer so peers' tiles disappear.
     await emit("stop-share").catch(() => {});
     // Local feedback; peers get theirs via the share-stopped broadcast.
     store.getState().announceEvent(announce_share_stopped_you());
     playCue(sharedAudioContext, "share-stop");
-  }, [store, teardownShareLocal, emit]);
+  }, [store, graph, emit]);
 
   const startAudioShare = useCallback(async () => {
     if (store.getState().isSharingAudio) return;
@@ -2109,13 +1950,7 @@ export function useMediasoup() {
 
     // Route the shared audio into its OWN destination (not the voice graph), so
     // it becomes a separate high-bitrate stereo producer.
-    const g = ensureOutGraph();
-    const shareDest = sharedAudioContext.createMediaStreamDestination();
-    const displaySource = sharedAudioContext.createMediaStreamSource(new MediaStream(audioTracks));
-    displaySource.connect(shareDest);
-    g.displaySource = displaySource;
-    g.shareDest = shareDest;
-    displayStreamRef.current = displayStream;
+    graph.attachShare(audioTracks, displayStream);
 
     // Fire when the user hits the browser's "Stop sharing" UI
     audioTracks[0].addEventListener("ended", () => {
@@ -2130,12 +1965,12 @@ export function useMediasoup() {
     // isSharingAudio). Either way produceShare is idempotent.
     const wasSfu = modeRef.current === "sfu";
     await emit("start-share").catch(() => {});
-    if (wasSfu) await produceShare();
+    if (wasSfu) await graph.produceShare();
 
     // Local feedback; peers get theirs via the share-started broadcast.
     store.getState().announceEvent(announce_share_started_you());
     playCue(sharedAudioContext, "share-start");
-  }, [store, ensureOutGraph, stopAudioShare, produceShare, emit]);
+  }, [store, graph, stopAudioShare, emit]);
 
   const toggleAudioShare = useCallback(async () => {
     if (store.getState().isSharingAudio) await stopAudioShare();
@@ -2154,19 +1989,8 @@ export function useMediasoup() {
     // Drop the element's ended/error listeners first so teardown can't fire them.
     fileAbortRef.current?.abort();
     fileAbortRef.current = null;
-    if (fileProducerRef.current) {
-      if (!fileProducerRef.current.closed) fileProducerRef.current.close();
-      fileProducerRef.current = null;
-    }
-    const g = outGraphRef.current;
-    g?.fileSource?.disconnect();
-    g?.fileDest?.disconnect();
-    g?.fileMonitorGain?.disconnect();
-    if (g) {
-      g.fileSource = null;
-      g.fileDest = null;
-      g.fileMonitorGain = null;
-    }
+    // Close the file producer + disconnect the file nodes (the graph owns those).
+    graph.teardownFileNodes();
     if (fileAudioRef.current) {
       fileAudioRef.current.pause();
       fileAudioRef.current.src = "";
@@ -2178,7 +2002,7 @@ export function useMediasoup() {
     }
     store.getState().setFileStream(null);
     store.getState().setFileStreamPlaying(false);
-  }, [store]);
+  }, [store, graph]);
 
   const stopFileStream = useCallback(
     async (announcement?: string) => {
@@ -2194,15 +2018,16 @@ export function useMediasoup() {
   );
 
   // Keep the owner-side teardown bridge current for the peer-stream-stopped
-  // handler registered in join() (see stopOwnStreamLocalRef).
+  // handler registered in join() (see stopOwnStreamLocalRef). The share teardown
+  // lives on the graph; the file teardown is the hook's (owns the <audio> element).
   useEffect(() => {
     stopOwnStreamLocalRef.current = (source) =>
-      source === "share" ? teardownShareLocal() : teardownFileLocal();
-  }, [teardownShareLocal, teardownFileLocal]);
+      source === "share" ? graph.teardownShareLocal() : teardownFileLocal();
+  }, [graph, teardownFileLocal]);
 
   const startFileSource = useCallback(
     async (src: string, name: string, objectUrl?: string) => {
-      const g = ensureOutGraph();
+      graph.ensure();
       resumeContext(sharedAudioContext);
 
       const firstStart = store.getState().fileStreamName == null;
@@ -2212,8 +2037,7 @@ export function useMediasoup() {
       // (the produced track is fileDest's, which never changes — only its input).
       fileAbortRef.current?.abort();
       fileAbortRef.current = null;
-      g.fileSource?.disconnect();
-      g.fileSource = null;
+      graph.disconnectFileSource();
       if (fileAudioRef.current) {
         fileAudioRef.current.pause();
         fileAudioRef.current.src = "";
@@ -2232,23 +2056,8 @@ export function useMediasoup() {
       (audioEl as unknown as Record<string, boolean>).playsInline = true;
       fileAudioRef.current = audioEl;
 
-      const source = sharedAudioContext.createMediaElementSource(audioEl);
-      g.fileSource = source;
-      // Its OWN destination → produced as a separate stereo "file" track. This
-      // is the full-level track everyone else hears — the monitor gain below
-      // never touches it.
-      if (!g.fileDest) g.fileDest = sharedAudioContext.createMediaStreamDestination();
-      source.connect(g.fileDest);
-      // Also monitor it locally, so the streamer hears what they're playing —
-      // but THROUGH a gain node so they can set how loud it is FOR THEM (default
-      // 50%) without changing what others hear. The node persists across file
-      // swaps; only the source feeding it is recreated.
-      if (!g.fileMonitorGain) {
-        g.fileMonitorGain = sharedAudioContext.createGain();
-        g.fileMonitorGain.gain.value = store.getState().streamMonitorVolume;
-        g.fileMonitorGain.connect(sharedAudioContext.destination);
-      }
-      source.connect(g.fileMonitorGain);
+      // Wire the element into its own produced dest + a local monitor gain.
+      graph.connectFileElement(audioEl);
 
       // Stop the whole stream when the file ends or fails to decode.
       const ac = new AbortController();
@@ -2276,20 +2085,20 @@ export function useMediasoup() {
         // the SFU and setupSfu produces the file (it sees fileStreamName).
         const wasSfu = modeRef.current === "sfu";
         await emit("start-file-stream").catch(() => {});
-        if (wasSfu) await produceFile();
+        if (wasSfu) await graph.produceFile();
         store.getState().announceEvent(announce_file_stream_started_you());
         playCue(sharedAudioContext, "share-start");
       } else {
         // Replacing the file mid-stream — producer/SFU pin are unchanged, but the
         // persisted producer still carries the OLD file's title, so push the new
         // one so other peers' tiles re-label from the old file name to the new.
-        const fileProducerId = fileProducerRef.current?.id;
+        const fileProducerId = graph.fileProducerId;
         if (fileProducerId)
           emit("update-stream-title", { producerId: fileProducerId, title: name }).catch(() => {});
         store.getState().announce(file_player_streaming({ name }));
       }
     },
-    [store, ensureOutGraph, emit, produceFile, stopFileStream],
+    [store, graph, emit, stopFileStream],
   );
 
   const startFileStream = useCallback(
@@ -2416,28 +2225,14 @@ export function useMediasoup() {
   }, [startStreaming, stopStreaming, store]);
 
   // Live mic-gain control: persists the value and ramps the outgoing gain node.
-  const setMicGain = useCallback(
-    (gain: number) => {
-      store.getState().setMicGain(gain);
-      const g = outGraphRef.current;
-      if (g) g.micGain.gain.setTargetAtTime(gain, sharedAudioContext.currentTime, GAIN_RAMP);
-    },
-    [store],
-  );
+  const setMicGain = useCallback((gain: number) => graph.setMicGain(gain), [graph]);
 
   // Live local-monitor volume for the file/URL stream: persists the value and
   // ramps the monitor gain node. Only changes what the streamer hears — the
   // produced track (fileDest) everyone else consumes is untouched.
   const setStreamMonitorVolume = useCallback(
-    (volume: number) => {
-      store.getState().setStreamMonitorVolume(volume);
-      outGraphRef.current?.fileMonitorGain?.gain.setTargetAtTime(
-        volume,
-        sharedAudioContext.currentTime,
-        GAIN_RAMP,
-      );
-    },
-    [store],
+    (volume: number) => graph.setStreamMonitorVolume(volume),
+    [graph],
   );
 
   // Send a chat message. Returns why it didn't go out so the caller can keep
@@ -2465,7 +2260,6 @@ export function useMediasoup() {
   );
 
   const leave = useCallback(() => {
-    detachSharedAudio();
     // Tear down any active file stream (stops the <audio>, revokes its URL).
     fileAbortRef.current?.abort();
     fileAbortRef.current = null;
@@ -2482,18 +2276,7 @@ export function useMediasoup() {
     teardownSfu();
     // Tear down the outgoing graph (nodes live in the shared context, so just
     // disconnect them — the context itself is reused for the next room).
-    const g = outGraphRef.current;
-    if (g) {
-      g.micSource?.disconnect();
-      g.micGain.disconnect();
-      g.limiter.disconnect();
-      g.displaySource?.disconnect();
-      g.shareDest?.disconnect();
-      g.fileSource?.disconnect();
-      g.fileDest?.disconnect();
-      g.fileMonitorGain?.disconnect();
-      outGraphRef.current = null;
-    }
+    graph.disconnectAll();
     // Tear down every outgoing extra mic — the capture + Web Audio nodes are
     // app-owned (stopTracks:false producers), so they'd leak across rooms otherwise.
     for (const entry of extraMicsRef.current.values()) {
@@ -2503,8 +2286,6 @@ export function useMediasoup() {
       entry.stream.getTracks().forEach((t) => t.stop());
     }
     extraMicsRef.current.clear();
-    musicProducerRef.current = null;
-    fileProducerRef.current = null;
     // Incoming-stream owner maps are owned by PeerAudioRegistry and already
     // cleared by registry.cleanupAll() (via teardownP2p/teardownSfu above).
     // Cancel any pending coalesced mute/duck announcements.
@@ -2518,7 +2299,7 @@ export function useMediasoup() {
     socketRef.current = null;
     deviceRef.current = null;
     store.getState().reset();
-  }, [teardownP2p, teardownSfu, detachSharedAudio, store]);
+  }, [teardownP2p, teardownSfu, graph, store]);
 
   // Allow/deny a pending join request (participant side). Optimistically drop it
   // from our local list so the button doesn't linger; the server also broadcasts
