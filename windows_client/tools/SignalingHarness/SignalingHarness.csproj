@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SonicRoom.SignalingHarness</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SocketIOClient" Version="3.1.2" />
+    <PackageReference Include="SIPSorcery" Version="10.0.11" />
+    <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="NAudio" Version="2.3.0" />
+  </ItemGroup>
+
+  <!-- Reuse the real signaling + transport code (no copy) so the harness tests exactly what the app ships. -->
+  <ItemGroup>
+    <Compile Include="..\..\src\Signaling\SignalingClient.cs" Link="Signaling\SignalingClient.cs" />
+    <Compile Include="..\..\src\Signaling\SignalingMessages.cs" Link="Signaling\SignalingMessages.cs" />
+    <Compile Include="..\..\src\Transport\MediasoupModels.cs" Link="Transport\MediasoupModels.cs" />
+    <Compile Include="..\..\src\Transport\MediasoupDevice.cs" Link="Transport\MediasoupDevice.cs" />
+    <Compile Include="..\..\src\Transport\MediasoupRpc.cs" Link="Transport\MediasoupRpc.cs" />
+    <Compile Include="..\..\src\Transport\RemoteSdp.cs" Link="Transport\RemoteSdp.cs" />
+    <Compile Include="..\..\src\Transport\MediasoupSendTransport.cs" Link="Transport\MediasoupSendTransport.cs" />
+    <Compile Include="..\..\src\Transport\MediasoupRecvTransport.cs" Link="Transport\MediasoupRecvTransport.cs" />
+    <Compile Include="..\..\src\Audio\PeerMixer.cs" Link="Audio\PeerMixer.cs" />
+    <Compile Include="..\..\src\Audio\MicCapture.cs" Link="Audio\MicCapture.cs" />
+    <Compile Include="..\..\src\Audio\ProcessLoopbackInterop.cs" Link="Audio\ProcessLoopbackInterop.cs" />
+    <Compile Include="..\..\src\Audio\ProcessLoopbackCapture.cs" Link="Audio\ProcessLoopbackCapture.cs" />
+    <Compile Include="..\..\src\Audio\ShareBus.cs" Link="Audio\ShareBus.cs" />
+    <Compile Include="..\..\src\Audio\AudioAppEnumerator.cs" Link="Audio\AudioAppEnumerator.cs" />
+    <Compile Include="..\..\src\Diag.cs" Link="Diag.cs" />
+  </ItemGroup>
+
+</Project>

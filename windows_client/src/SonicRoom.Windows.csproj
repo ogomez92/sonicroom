@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>SonicRoom.Windows</RootNamespace>
+    <AssemblyName>SonicRoom</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- Unpackaged (Win32) app: no MSIX identity, launched as a plain .exe. -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.*" />
+    <PackageReference Include="NAudio" Version="2.3.0" />
+    <PackageReference Include="SIPSorcery" Version="10.0.11" />
+    <PackageReference Include="SocketIOClient" Version="3.1.2" />
+  </ItemGroup>
+
+  <!-- Transport / audio stack (fully native, no web engine):
+         SIPSorcery   — WebRTC (ICE, DTLS-SRTP, RTP) + Opus via Concentus
+         SocketIOClient — socket.io v4 signaling
+       Added per-phase as they come online. -->
+
+  <!-- Prism: screen-reader speech (NVDA/JAWS/Narrator/SAPI) via prism.dll. x64-only binaries
+       (vendored under libs/prism with NOTICE + LICENSES); on ARM64 PrismSpeech falls back to
+       UIA notifications at runtime, so the app still builds and speaks there. -->
+  <ItemGroup Condition="'$(Platform)' != 'ARM64'">
+    <None Include="..\libs\prism\x64\prism.dll" Link="prism.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\libs\prism\x64\tolk.dll" Link="tolk.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

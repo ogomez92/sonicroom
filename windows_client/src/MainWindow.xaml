@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="SonicRoom.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    mc:Ignorable="d"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+
+    <Grid x:Name="RootGrid" Padding="16">
+        <!-- Connect screen -->
+        <ScrollViewer x:Name="ConnectScroll" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel x:Name="ConnectPanel" Spacing="10" MaxWidth="440">
+            <TextBlock Text="SonicRoom" Style="{StaticResource TitleTextBlockStyle}" HorizontalAlignment="Center" />
+            <TextBlock x:Name="SubtitleText" Text="Native Windows client" Opacity="0.6" HorizontalAlignment="Center" Margin="0,0,0,8" />
+            <ComboBox x:Name="LanguageSelect" Header="Language" AutomationProperties.Name="Language"
+                      HorizontalAlignment="Stretch" SelectionChanged="OnLanguageChanged" />
+            <TextBox x:Name="ServerBox" Header="Server URL" AutomationProperties.Name="Server URL"
+                     Text="https://sonic.oriolgomez.com" />
+            <TextBox x:Name="RoomBox" Header="Room" AutomationProperties.Name="Room" Text="test" />
+            <TextBox x:Name="NameBox" Header="Display name" AutomationProperties.Name="Display name" Text="WinNative" />
+            <ComboBox x:Name="MicSelect" Header="Microphone" AutomationProperties.Name="Microphone"
+                      HorizontalAlignment="Stretch" DropDownOpened="OnMicDropDownOpened" />
+            <ComboBox x:Name="SpeakerSelect" Header="Speaker" AutomationProperties.Name="Speaker"
+                      HorizontalAlignment="Stretch" DropDownOpened="OnSpeakerDropDownOpened" />
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <ToggleButton x:Name="MicTestButton" Content="Test microphone" Click="OnMicTestClick" />
+                <ProgressBar x:Name="MicLevelBar" Grid.Column="1" Maximum="100" VerticalAlignment="Center"
+                             AutomationProperties.Name="Microphone level" />
+            </Grid>
+            <CheckBox x:Name="ListenOnlyCheck" Content="Listen only (no microphone)" />
+            <CheckBox x:Name="PublicCheck" Content="Make this room public (listed + vote-to-kick)" />
+            <CheckBox x:Name="HifiCheck" Content="Hi-fi voice (stereo, higher bitrate)"
+                      Click="OnHifiChanged" />
+            <Button x:Name="ConnectButton" Content="Join call" Click="OnConnectClick"
+                    Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Stretch" />
+            <TextBlock x:Name="ConnectStatus" Opacity="0.7" TextWrapping="Wrap"
+                       AutomationProperties.Name="Connection status" />
+
+            <!-- Public rooms (server /api/public-rooms, like the web lobby). Click/Enter on a
+                 room fills the Room box; Join call then enters it (knock-to-join may apply). -->
+            <Grid Margin="0,8,0,0">
+                <TextBlock x:Name="PublicRoomsHeader" Text="Public rooms" Style="{StaticResource BaseTextBlockStyle}"
+                           VerticalAlignment="Center" />
+                <Button x:Name="RefreshRoomsButton" Content="Refresh" Click="OnRefreshRoomsClick"
+                        HorizontalAlignment="Right"
+                        AutomationProperties.Name="Refresh public rooms" />
+            </Grid>
+            <ListView x:Name="PublicRoomsList" SelectionMode="None" IsItemClickEnabled="True"
+                      ItemClick="OnPublicRoomClick" MaxHeight="180"
+                      AutomationProperties.Name="Public rooms" />
+            <TextBlock x:Name="PublicRoomsEmpty" Text="No public rooms right now." Opacity="0.6" />
+        </StackPanel>
+        </ScrollViewer>
+
+        <!-- In-call screen -->
+        <Grid x:Name="CallPanel" Visibility="Collapsed" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Spacing="2">
+                <TextBlock x:Name="CallTitle" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <TextBlock x:Name="CallStatus" Opacity="0.7" TextWrapping="Wrap"
+                           AutomationProperties.Name="Call status" />
+            </StackPanel>
+
+            <Grid Grid.Row="1" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="340" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Participants -->
+                <Border Grid.Column="0" BorderThickness="1" CornerRadius="6"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                    <ListView x:Name="PeersList" SelectionMode="None"
+                              AutomationProperties.Name="Participants">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnSpacing="8" Padding="4,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="14" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="130" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding DisplayName}" VerticalAlignment="Center" />
+                                    <!-- Speaking dot: visual only; SR users query with Ctrl+W instead
+                                         (a per-word UIA update would be unbearable). -->
+                                    <TextBlock Grid.Column="1" Text="{Binding SpeakingGlyph}"
+                                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                               AutomationProperties.AccessibilityView="Raw"
+                                               VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Text="{Binding MuteLabel}" Opacity="0.55" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="3" Text="{Binding VoteLabel}" Opacity="0.55" VerticalAlignment="Center" />
+                                    <Slider Grid.Column="4" Minimum="0" Maximum="2" StepFrequency="0.05"
+                                            Value="{Binding Volume, Mode=TwoWay}" ValueChanged="OnPeerVolumeChanged"
+                                            AutomationProperties.Name="{Binding VolumeLabel}"
+                                            VerticalAlignment="Center" />
+                                    <!-- Client-side mute of this one peer (my ears only). -->
+                                    <ToggleButton Grid.Column="5" Content="{Binding LocalMuteContent}"
+                                                  Click="OnLocalMuteClick"
+                                                  IsChecked="{Binding LocalMuted, Mode=TwoWay}"
+                                                  AutomationProperties.Name="{Binding LocalMuteLabel}"
+                                                  VerticalAlignment="Center" />
+                                    <!-- Force-stop one of this peer's share/file/mic streams (anti-troll). -->
+                                    <Button Grid.Column="6" Content="{Binding StopStreamContent}"
+                                            Click="OnStopStreamClick"
+                                            AutomationProperties.Name="{Binding StopStreamLabel}"
+                                            Visibility="{Binding StopStreamVisibility}"
+                                            VerticalAlignment="Center" />
+                                    <!-- Remove a music caster outright (any room; server-guarded). -->
+                                    <Button Grid.Column="7" Content="{Binding CasterContent}"
+                                            Click="OnRemoveCasterClick"
+                                            AutomationProperties.Name="{Binding CasterLabel}"
+                                            Visibility="{Binding CasterVisibility}"
+                                            VerticalAlignment="Center" />
+                                    <!-- ToggleButton = UIA "pressed" state, the aria-pressed of the web
+                                         client's kick button; the name carries the running tally. -->
+                                    <ToggleButton Grid.Column="8" Content="{Binding KickContent}" Click="OnKickPeerClick"
+                                                  IsChecked="{Binding MyVote, Mode=TwoWay}"
+                                                  AutomationProperties.Name="{Binding KickLabel}"
+                                                  Visibility="{Binding KickVisibility}"
+                                                  VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Border>
+
+                <!-- Chat: a permanent read-only transcript the screen reader can walk with the
+                     caret (arrow keys / select / copy), directly beside the composer. -->
+                <Grid Grid.Column="1" RowSpacing="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <!-- NoWrap: one timeline entry = one caret line, so arrowing down the
+                         history with a screen reader is one message per keypress. -->
+                    <TextBox x:Name="ChatHistoryBox" Grid.Row="0" Header="Chat"
+                             AutomationProperties.Name="Chat history"
+                             IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                             IsSpellCheckEnabled="False"
+                             PlaceholderText="No messages yet."
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                    <Grid Grid.Row="1" ColumnSpacing="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="ChatInput" PlaceholderText="Message" KeyDown="OnChatKeyDown"
+                                 AutomationProperties.Name="Message" />
+                        <Button x:Name="SendButton" Grid.Column="1" Content="Send" Click="OnSendChatClick"
+                                AutomationProperties.Name="Send message" />
+                    </Grid>
+                </Grid>
+            </Grid>
+
+            <!-- Bottom row: the button toolbar (one Tab stop, Left/Right arrows move between
+                 buttons) plus the mic-gain/master sliders OUTSIDE the arrow-nav group — a slider
+                 eats Left/Right itself, so inside the toolbar it would trap arrow navigation.
+                 Each button carries a Ctrl accelerator, scoped to the call screen so nothing
+                 fires from the lobby; UIA exposes it so screen readers announce it. -->
+            <Grid Grid.Row="2" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+            <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
+                <StackPanel x:Name="CallControls" Orientation="Horizontal" Spacing="8"
+                            XYFocusKeyboardNavigation="Enabled" TabFocusNavigation="Once"
+                            AutomationProperties.Name="Call controls">
+                <ToggleButton x:Name="MuteButton" Content="Mute" Click="OnMuteClick"
+                              AutomationProperties.Name="Mute microphone">
+                    <ToggleButton.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="M" ScopeOwner="{x:Bind CallPanel}" />
+                    </ToggleButton.KeyboardAccelerators>
+                </ToggleButton>
+                <ToggleButton x:Name="DeafenButton" Content="Deafen" Click="OnDeafenClick"
+                              AutomationProperties.Name="Deafen">
+                    <ToggleButton.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="D" ScopeOwner="{x:Bind CallPanel}" />
+                    </ToggleButton.KeyboardAccelerators>
+                </ToggleButton>
+                <!-- Room-wide auto-ducking toggle (anyone can flip it; server-authoritative). -->
+                <ToggleButton x:Name="DuckButton" Content="Auto-duck music" Click="OnDuckClick"
+                              AutomationProperties.Name="Auto-duck music under voices">
+                    <ToggleButton.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="U" ScopeOwner="{x:Bind CallPanel}" />
+                    </ToggleButton.KeyboardAccelerators>
+                </ToggleButton>
+                <Button x:Name="SpeakersButton" Content="Who's speaking" Click="OnSpeakersClick"
+                        AutomationProperties.Name="Announce who is speaking">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="W" ScopeOwner="{x:Bind CallPanel}" />
+                    </Button.KeyboardAccelerators>
+                </Button>
+                <Button x:Name="ShareButton" Content="Share app audio" Click="OnShareClick">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="S" ScopeOwner="{x:Bind CallPanel}" />
+                    </Button.KeyboardAccelerators>
+                </Button>
+                <Button x:Name="ExtraMicButton" Content="Extra mics" Click="OnExtraMicClick">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="E" ScopeOwner="{x:Bind CallPanel}" />
+                    </Button.KeyboardAccelerators>
+                </Button>
+                <Button x:Name="FileButton" Content="Play file" Click="OnFileClick">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="F" ScopeOwner="{x:Bind CallPanel}" />
+                    </Button.KeyboardAccelerators>
+                </Button>
+                <!-- Swap the streamed file in place (same producer, listeners see one continuous
+                     stream). Visible only while a file is streaming. -->
+                <Button x:Name="ChangeFileButton" Content="Change file" Click="OnChangeFileClick"
+                        Visibility="Collapsed" />
+                <Button x:Name="RecordButton" Content="Record" Click="OnRecordClick">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="R" ScopeOwner="{x:Bind CallPanel}" />
+                    </Button.KeyboardAccelerators>
+                </Button>
+                <!-- Download the finished (or in-progress) recording; the flyout picks mixed vs
+                     per-track. Visible while the server still holds the recording. -->
+                <Button x:Name="DownloadButton" Content="Download recording" Visibility="Collapsed"
+                        AutomationProperties.Name="Download recording">
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem x:Name="DownloadMixedItem" Text="Mixed (OGG)" Click="OnDownloadMixedClick" />
+                            <MenuFlyoutItem x:Name="DownloadTracksItem" Text="Separate tracks (ZIP)" Click="OnDownloadTracksClick" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <Button x:Name="StreamButton" Content="Stream" Click="OnStreamClick">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="T" ScopeOwner="{x:Bind CallPanel}" />
+                    </Button.KeyboardAccelerators>
+                </Button>
+                <Button x:Name="LeaveButton" Content="Leave" Click="OnLeaveClick"
+                        AutomationProperties.Name="Leave call">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="L" ScopeOwner="{x:Bind CallPanel}" />
+                    </Button.KeyboardAccelerators>
+                </Button>
+                </StackPanel>
+            </ScrollViewer>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <TextBlock x:Name="MicGainLabel" Text="Mic gain" VerticalAlignment="Center" />
+                <Slider x:Name="MicGainSlider" Minimum="0" Maximum="4" StepFrequency="0.05" Value="1"
+                        Width="120" VerticalAlignment="Center" ValueChanged="OnMicGainChanged"
+                        AutomationProperties.Name="Microphone gain" />
+                <TextBlock x:Name="MasterLabel" Text="Master" VerticalAlignment="Center" />
+                <Slider x:Name="MasterVolume" Minimum="0" Maximum="2" StepFrequency="0.05" Value="1"
+                        Width="140" VerticalAlignment="Center" ValueChanged="OnMasterVolumeChanged"
+                        AutomationProperties.Name="Master volume" />
+            </StackPanel>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>
