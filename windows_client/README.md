@@ -32,6 +32,9 @@ from a native Settings store.
 - .NET 9 SDK.
 - The Windows App SDK runtime (installed with the VS "Windows App SDK" component, or run a
   self-contained build — see Packaging, later phase).
+- [FFmpeg](https://ffmpeg.org/) for media playback (`winget install Gyan.FFmpeg.Essentials`).
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) for YouTube watch-link playback
+  (`winget install yt-dlp.yt-dlp`).
 
 ## Layout
 
@@ -73,9 +76,12 @@ dotnet run -p:Platform=x64
 - **Extra microphones** — stream additional input devices, each its own `mic` producer, with a
   per-device **mono/stereo** choice (persisted by device name; flipping it on a live mic
   restarts that producer, since a codec layout can't be renegotiated).
-- **File playback** — play a local audio file into the call as a `file` producer; **Change
-  file** swaps the content on the live producer (no stop/start — listeners just see the title
-  update via `update-stream-title`, like the web client).
+- **Media playback** — play the audio track from any FFmpeg-supported local media file, a direct
+  HTTP/HTTPS media stream, or a YouTube watch link into the call as a `file` producer. **Change
+  media** swaps content on the live producer (no stop/start — listeners just see the title update
+  via `update-stream-title`, like the web client). Outgoing media is also monitored through the
+  selected local speaker and follows master volume, deafen, and auto-ducking. A persisted media
+  volume slider controls both the local monitor and the audio sent to remote listeners.
 - **Recording** with **download** (mixed OGG or per-track ZIP via the recording token; the
   link survives stop and clears on `recording-expired`) and **Icecast live streaming** —
   start/stop, room-wide LIVE state.

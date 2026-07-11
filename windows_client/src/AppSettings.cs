@@ -22,6 +22,8 @@ public sealed class AppSettings
     public bool HifiVoice { get; set; }
     /// <summary>Send-side mic boost (0–4×) applied before the soft limiter, like the web's micGain.</summary>
     public double MicGain { get; set; } = 1.0;
+    /// <summary>Outgoing media gain (0–2×), applied to both local monitoring and remote audio.</summary>
+    public double MediaVolume { get; set; } = 1.0;
     /// <summary>Per-device extra-mic channel choice, keyed by device product name (WaveIn
     /// indices shift across replugs) — the web's <c>sonicroom:micStereoByDevice</c>.</summary>
     public Dictionary<string, bool> MicStereoByDevice { get; set; } = new();

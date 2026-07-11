@@ -92,6 +92,7 @@ public sealed partial class MainWindow : Window
         NameBox.Text = settings.DisplayName;
         HifiCheck.IsChecked = settings.HifiVoice;
         MicGainSlider.Value = settings.MicGain;
+        MediaVolumeSlider.Value = settings.MediaVolume;
         _micStereoByDevice = settings.MicStereoByDevice ?? new();
 
         // Land the keyboard where the next action is: the room name when a server is already
@@ -162,6 +163,7 @@ public sealed partial class MainWindow : Window
             Language = I18n.Lang,
             HifiVoice = HifiCheck.IsChecked == true,
             MicGain = MicGainSlider.Value,
+            MediaVolume = MediaVolumeSlider.Value,
             MicStereoByDevice = _micStereoByDevice,
         }.Save();
     }
@@ -253,6 +255,8 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(LeaveButton, I18n.T("leave_call"));
         MicGainLabel.Text = I18n.T("mic_gain");
         AutomationProperties.SetName(MicGainSlider, I18n.T("mic_gain_name"));
+        MediaVolumeLabel.Text = I18n.T("media_volume");
+        AutomationProperties.SetName(MediaVolumeSlider, I18n.T("media_volume_name"));
         MasterLabel.Text = I18n.T("master");
         AutomationProperties.SetName(MasterVolume, I18n.T("master_volume_name"));
     }
@@ -778,6 +782,14 @@ public sealed partial class MainWindow : Window
             if (_inCall && !string.IsNullOrEmpty(title))
                 AnnounceEvent(I18n.F("now_streaming", name, title!));
         });
+        session.FilePlaybackEnded += error => Enqueue(() =>
+        {
+            FileButton.Content = I18n.T("play_file");
+            ChangeFileButton.Visibility = Visibility.Collapsed;
+            if (!_inCall) return;
+            if (string.IsNullOrEmpty(error)) AnnounceEvent(I18n.T("media_finished"));
+            else Announce(I18n.F("file_failed", error));
+        });
         session.JoinPending += () => Enqueue(() => Announce(I18n.T("waiting_admit")));
         session.RoomBecamePublic += () => Enqueue(() =>
         {
@@ -819,6 +831,7 @@ public sealed partial class MainWindow : Window
 
         session.HifiVoice = HifiCheck.IsChecked == true;
         session.MicGain = (float)MicGainSlider.Value;
+        session.MediaVolume = (float)MediaVolumeSlider.Value;
 
         var room = RoomBox.Text.Trim();
         try
@@ -962,6 +975,11 @@ public sealed partial class MainWindow : Window
     private void OnMicGainChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         if (_session is not null) _session.MicGain = (float)e.NewValue;
+    }
+
+    private void OnMediaVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (_session is not null) _session.MediaVolume = (float)e.NewValue;
     }
 
     private void OnPeerVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
@@ -1391,7 +1409,7 @@ public sealed partial class MainWindow : Window
             AnnounceEvent(I18n.T("you_stopped_file"));
             return;
         }
-        await PickAndStreamFileAsync(swap: false);
+        await PickAndStreamMediaAsync(swap: false);
     }
 
     /// <summary>Swap the streamed file on the LIVE producer — listeners keep one continuous
@@ -1399,25 +1417,65 @@ public sealed partial class MainWindow : Window
     private async void OnChangeFileClick(object sender, RoutedEventArgs e)
     {
         if (_session is null || !_session.IsStreamingFile) return;
-        await PickAndStreamFileAsync(swap: true);
+        await PickAndStreamMediaAsync(swap: true);
     }
 
-    private async System.Threading.Tasks.Task PickAndStreamFileAsync(bool swap)
+    private async System.Threading.Tasks.Task PickAndStreamMediaAsync(bool swap)
     {
-        var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-        foreach (var ext in new[] { ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma" })
-            picker.FileTypeFilter.Add(ext);
+        var urlBox = Named(new TextBox
+        {
+            Header = I18n.T("media_url"),
+            PlaceholderText = "https://example.com/media.mp4",
+        }, I18n.T("media_url"));
+        var panel = new StackPanel { Spacing = 8, MinWidth = 420 };
+        panel.Children.Add(new TextBlock { Text = I18n.T("media_url_hint"), TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(urlBox);
+        var dialog = new ContentDialog
+        {
+            Title = I18n.T("media_dialog_title"),
+            Content = panel,
+            PrimaryButtonText = I18n.T("choose_file"),
+            SecondaryButtonText = I18n.T("play_file"),
+            CloseButtonText = I18n.T("cancel"),
+            DefaultButton = ContentDialogButton.Secondary,
+            XamlRoot = ((FrameworkElement)Content).XamlRoot,
+        };
 
-        var file = await picker.PickSingleFileAsync();
-        if (file is null || _session is null) return;
+        var result = await dialog.ShowAsync();
+        if (result == ContentDialogResult.None || _session is null) return;
+
+        string source;
+        string title;
+        if (result == ContentDialogResult.Primary)
+        {
+            var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.FileTypeFilter.Add("*");
+            var file = await picker.PickSingleFileAsync();
+            if (file is null || _session is null) return;
+            source = file.Path;
+            title = file.Name;
+        }
+        else
+        {
+            var value = urlBox.Text.Trim();
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                Announce(I18n.T("invalid_media_url"));
+                return;
+            }
+            source = uri.AbsoluteUri;
+            title = Uri.UnescapeDataString(Path.GetFileName(uri.AbsolutePath));
+            if (string.IsNullOrWhiteSpace(title)) title = uri.Host;
+        }
 
         try
         {
-            await _session.StartFileAsync(file.Path, file.Name);
+            title = await _session.StartFileAsync(source, title);
             FileButton.Content = I18n.T("stop_file");
             ChangeFileButton.Visibility = Visibility.Visible;
-            AnnounceEvent(swap ? I18n.F("you_swapped_file", file.Name) : I18n.F("playing_file", file.Name));
+            AnnounceEvent(swap ? I18n.F("you_swapped_file", title) : I18n.F("playing_file", title));
         }
         catch (Exception ex) { Announce(I18n.F("file_failed", ex.Message)); }
     }

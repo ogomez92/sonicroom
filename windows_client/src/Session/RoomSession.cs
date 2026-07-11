@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Concentus.Enums;
 using Concentus.Structs;
@@ -92,6 +95,7 @@ public sealed class RoomSession : IAsyncDisposable
     public event Action<string, string, bool, string>? StreamForceStopped;
     /// <summary>A file streamer swapped files in place — owner display name + the new title.</summary>
     public event Action<string, string?>? FileTitleChanged;
+    public event Action<string?>? FilePlaybackEnded;             // null = EOF, otherwise decoder error
     public event Action<bool, string?>? DuckingChangedEvent;     // enabled, by
 
     public bool IsRecording { get; private set; }
@@ -109,6 +113,9 @@ public sealed class RoomSession : IAsyncDisposable
 
     /// <summary>Send-side mic boost (0–4×), applied before the soft limiter. Live-adjustable.</summary>
     public float MicGain { get; set; } = 1f;
+
+    /// <summary>Outgoing media gain (0–2×), applied before local monitoring and Opus encoding.</summary>
+    public float MediaVolume { get; set; } = 1f;
 
     /// <summary>Number of votable (human) participants including me — vote-to-kick needs ≥ 3.
     /// Casters are infrastructure, not people: they're excluded (matching the web's gate).</summary>
@@ -545,68 +552,313 @@ public sealed class RoomSession : IAsyncDisposable
     /// live producer (no stop/start, so listeners keep one continuous stream and just see the
     /// title change via <c>update-stream-title</c> → <c>producer-title-updated</c>, like the web).
     /// </summary>
-    public async Task StartFileAsync(string path, string title)
+    public async Task<string> StartFileAsync(string source, string title)
     {
-        if (_listenOnly || _send is null) { Log?.Invoke("file streaming requires an active mic session"); return; }
+        if (_listenOnly || _send is null)
+            throw new InvalidOperationException("Media streaming requires an active microphone session.");
+        if (!File.Exists(source) &&
+            (!Uri.TryCreate(source, UriKind.Absolute, out var uri) ||
+             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)))
+        {
+            throw new ArgumentException("The media source must be an existing local file or an HTTP/HTTPS URL.", nameof(source));
+        }
 
+        var requestedSource = source;
+        (source, title) = await ResolveWebMediaWithRetriesAsync(source, title, CancellationToken.None);
+        var ffmpeg = ResolveFfmpegPath();
         if (_fileProducer is { } live)
         {
             _filePumpCts?.Cancel();          // the old pump's finally sees the cancel and stays quiet
-            StartFilePump(live, path);
+            _mixer.ClearLocalMedia();
+            StartFilePump(live, source, requestedSource, title, ffmpeg);
             try { await _sig.EmitAckRawAsync("update-stream-title", new { producerId = live.ProducerId, title }); }
             catch (Exception ex) { Log?.Invoke($"update-stream-title: {ex.Message}"); }
-            Log?.Invoke($"file swapped to '{title}'");
-            return;
+            Log?.Invoke($"media swapped to '{title}'");
+            return title;
         }
 
         await _sig.EmitAckRawAsync("start-file-stream", new { });
         var prod = await _send.ProduceAsync("file", title, stereo: true, maxAverageBitrate: 128000);
         _fileProducer = prod;
-        StartFilePump(prod, path);
-        Log?.Invoke($"file streaming '{title}' started");
+        StartFilePump(prod, source, requestedSource, title, ffmpeg);
+        Log?.Invoke($"media streaming '{title}' started");
+        return title;
     }
 
-    private void StartFilePump(MediasoupSendTransport.Producer prod, string path)
+    private static async Task<(string Source, string Title)> ResolveWebMediaAsync(string source, string title)
     {
-        var cts = new System.Threading.CancellationTokenSource();
+        if (!Uri.TryCreate(source, UriKind.Absolute, out var uri) || !IsYouTubeHost(uri.Host))
+            return (source, title);
+
+        var startInfo = new ProcessStartInfo(ResolveYtDlpPath())
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in new[] { "--no-playlist", "--no-warnings", "--format", "bestaudio/best",
+                     "--print", "%(title)s", "--get-url", source })
+            startInfo.ArgumentList.Add(arg);
+
+        using var resolver = new Process { StartInfo = startInfo };
+        if (!resolver.Start()) throw new InvalidOperationException("yt-dlp could not be started.");
+        var outputTask = resolver.StandardOutput.ReadToEndAsync();
+        var errorTask = resolver.StandardError.ReadToEndAsync();
+        await resolver.WaitForExitAsync();
+        var output = await outputTask;
+        var error = (await errorTask).Trim();
+        if (resolver.ExitCode != 0)
+            throw new InvalidOperationException(string.IsNullOrEmpty(error)
+                ? $"yt-dlp exited with code {resolver.ExitCode}."
+                : error.Split('\n', StringSplitOptions.RemoveEmptyEntries).Last().Trim());
+
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 2 || !Uri.TryCreate(lines[^1].Trim(), UriKind.Absolute, out var mediaUri) ||
+            (mediaUri.Scheme != Uri.UriSchemeHttp && mediaUri.Scheme != Uri.UriSchemeHttps))
+            throw new InvalidOperationException("yt-dlp did not return a playable media URL.");
+        return (mediaUri.AbsoluteUri, lines[0].Trim());
+    }
+
+    private async Task<(string Source, string Title)> ResolveWebMediaWithRetriesAsync(
+        string source, string title, CancellationToken cancellationToken)
+    {
+        const int maxRetries = 2;
+        for (var retry = 0; ; retry++)
+        {
+            try { return await ResolveWebMediaAsync(source, title); }
+            catch (Exception ex) when (retry < maxRetries && IsForbidden(ex))
+            {
+                Log?.Invoke($"media resolver returned 403; retrying ({retry + 1}/{maxRetries})");
+                await Task.Delay(TimeSpan.FromSeconds(retry + 1), cancellationToken);
+            }
+        }
+    }
+
+    private static bool IsYouTubeHost(string host) =>
+        host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase) ||
+        host.Equals("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+        host.EndsWith(".youtube.com", StringComparison.OrdinalIgnoreCase);
+
+    private void StartFilePump(MediasoupSendTransport.Producer prod, string source,
+        string requestedSource, string title, string ffmpeg)
+    {
+        var cts = new CancellationTokenSource();
         _filePumpCts = cts;
         _ = Task.Run(async () =>
         {
+            string? failure = null;
             try
             {
-                NAudio.MediaFoundation.MediaFoundationApi.Startup();
-                using var reader = new AudioFileReader(path);
-                using var resampled = new MediaFoundationResampler(reader, new WaveFormat(48000, 16, 2)) { ResamplerQuality = 60 };
-                var enc = new OpusEncoder(48000, 2, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = 128000 };
-                var byteBuf = new byte[960 * 2 * 2]; // 20 ms stereo 16-bit
-                var pcm = new short[960 * 2];
-                var outBuf = new byte[4000];
-
-                while (!cts.IsCancellationRequested)
+                const int maxRetries = 2;
+                var currentSource = source;
+                for (var retry = 0; ; retry++)
                 {
-                    if (FillExact(resampled, byteBuf) == 0) break; // EOF
-                    for (var i = 0; i < pcm.Length; i++) pcm[i] = (short)(byteBuf[i * 2] | (byteBuf[i * 2 + 1] << 8));
-                    var len = enc.Encode(pcm, 0, 960, outBuf, 0, outBuf.Length);
-                    _send!.SendOpusFrame(prod, outBuf[..len]);
-                    await Task.Delay(20);
+                    try
+                    {
+                        await RunFileDecoderAsync(prod, currentSource, ffmpeg, cts.Token);
+                        break;
+                    }
+                    catch (Exception ex) when (!cts.IsCancellationRequested && retry < maxRetries && IsForbidden(ex))
+                    {
+                        Log?.Invoke($"media source returned 403; retrying ({retry + 1}/{maxRetries})");
+                        _mixer.ClearLocalMedia();
+                        await Task.Delay(TimeSpan.FromSeconds(retry + 1), cts.Token);
+                        (currentSource, _) = await ResolveWebMediaWithRetriesAsync(
+                            requestedSource, title, cts.Token);
+                    }
                 }
             }
-            catch (Exception ex) { Log?.Invoke($"file playback error: {ex.Message}"); }
-            finally { if (!cts.IsCancellationRequested) { _ = StopFileAsync(); } }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                failure = ex.Message;
+                Log?.Invoke($"media playback error: {ex.Message}");
+            }
+            finally
+            {
+                if (!cts.IsCancellationRequested)
+                {
+                    await StopFileAsync();
+                    FilePlaybackEnded?.Invoke(failure);
+                }
+                cts.Dispose();
+            }
         });
     }
 
-    private static int FillExact(IWaveProvider src, byte[] buf)
+    private static bool IsForbidden(Exception ex) =>
+        ex.Message.Contains("403", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase);
+
+    private async Task RunFileDecoderAsync(MediasoupSendTransport.Producer prod, string source,
+        string ffmpeg, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo(ffmpeg)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        var arguments = new List<string> { "-nostdin", "-hide_banner", "-loglevel", "error" };
+        if (Uri.TryCreate(source, UriKind.Absolute, out var mediaUri) &&
+            (mediaUri.Scheme == Uri.UriSchemeHttp || mediaUri.Scheme == Uri.UriSchemeHttps))
+        {
+            arguments.AddRange(new[] { "-rw_timeout", "15000000", "-reconnect", "1",
+                "-reconnect_streamed", "1", "-reconnect_delay_max", "5" });
+        }
+        arguments.AddRange(new[] { "-i", source, "-map", "0:a:0", "-vn", "-f", "s16le",
+            "-acodec", "pcm_s16le", "-ar", "48000", "-ac", "2", "pipe:1" });
+        foreach (var arg in arguments) startInfo.ArgumentList.Add(arg);
+
+        using var decoder = new Process { StartInfo = startInfo };
+        if (!decoder.Start()) throw new InvalidOperationException("FFmpeg could not be started.");
+        var errorTask = decoder.StandardError.ReadToEndAsync();
+        using var cancelDecoder = cancellationToken.Register(() =>
+        {
+            try { if (!decoder.HasExited) decoder.Kill(entireProcessTree: true); }
+            catch { }
+        });
+
+        // Decode-ahead: FFmpeg fills a bounded frame buffer as fast as it can decode (network
+        // reads included), while the paced loop below drains it in real time. The ~5 s of
+        // headroom absorbs network hiccups and slow decoder warm-up that used to underrun the
+        // real-time read; playback gates on ~2 s buffered (or EOF) at start and after a stall.
+        var buffer = new MediaFrameBuffer();
+        var decodeAhead = Task.Run(async () =>
+        {
+            try
+            {
+                var byteBuf = new byte[960 * 2 * 2]; // 20 ms stereo 16-bit
+                var stdout = decoder.StandardOutput.BaseStream;
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    if (buffer.IsFull) // cap reached: let playback drain (FFmpeg waits on its pipe)
+                    {
+                        await Task.Delay(20, cancellationToken);
+                        continue;
+                    }
+                    if (await FillExactAsync(stdout, byteBuf, cancellationToken) == 0) break;
+                    var frame = new short[960 * 2];
+                    for (var i = 0; i < frame.Length; i++)
+                        frame[i] = (short)(byteBuf[i * 2] | (byteBuf[i * 2 + 1] << 8));
+                    buffer.Enqueue(frame);
+                }
+            }
+            finally { buffer.Complete(); }
+        }, cancellationToken);
+
+        var enc = new OpusEncoder(48000, 2, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = 128000 };
+        var outBuf = new byte[4000];
+        var playbackClock = Stopwatch.StartNew();
+        long frameNumber = 0;
+        var wasPlaying = false;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var read = buffer.TryRead(out var pcm);
+            if (read == MediaFrameRead.Ended) break;
+            if (read == MediaFrameRead.Buffering)
+            {
+                // Send nothing rather than garbage; remote and local both go quiet together.
+                if (wasPlaying) Log?.Invoke("media rebuffering (decoder stalled)");
+                wasPlaying = false;
+                await Task.Delay(50, cancellationToken);
+                continue;
+            }
+            if (read == MediaFrameRead.Resumed)
+            {
+                // Re-anchor the pacing clock so the stall doesn't count as accumulated lag
+                // (the loop would otherwise blast frames to catch up).
+                playbackClock.Restart();
+                frameNumber = 0;
+            }
+            wasPlaying = true;
+
+            var mediaVolume = MediaVolume;
+            if (mediaVolume != 1f)
+                for (var i = 0; i < pcm!.Length; i++)
+                    pcm[i] = (short)Math.Clamp((int)(pcm[i] * mediaVolume), short.MinValue, short.MaxValue);
+            _mixer.QueueLocalMedia(pcm!);
+            var len = enc.Encode(pcm!, 0, 960, outBuf, 0, outBuf.Length);
+            _send!.SendOpusFrame(prod, outBuf[..len]);
+            frameNumber++;
+            var delayMs = frameNumber * 20.0 - playbackClock.Elapsed.TotalMilliseconds;
+            if (delayMs > 0) await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken);
+        }
+
+        if (cancellationToken.IsCancellationRequested) return;
+        await decodeAhead; // surface read errors (e.g. a 403 mid-stream) to the retry loop
+        await decoder.WaitForExitAsync(cancellationToken);
+        var error = (await errorTask).Trim();
+        if (decoder.ExitCode != 0)
+            throw new InvalidOperationException(string.IsNullOrEmpty(error)
+                ? $"FFmpeg exited with code {decoder.ExitCode}."
+                : error.Split('\n', StringSplitOptions.RemoveEmptyEntries).Last().Trim());
+    }
+
+    private static async Task<int> FillExactAsync(Stream source, byte[] buffer, CancellationToken cancellationToken)
     {
         var total = 0;
-        while (total < buf.Length)
+        while (total < buffer.Length)
         {
-            var n = src.Read(buf, total, buf.Length - total);
+            var n = await source.ReadAsync(buffer.AsMemory(total, buffer.Length - total), cancellationToken);
             if (n == 0) break;
             total += n;
         }
-        for (var i = total; i < buf.Length; i++) buf[i] = 0; // zero-pad the last partial frame
+        Array.Clear(buffer, total, buffer.Length - total); // zero-pad the last partial frame
         return total;
+    }
+
+    private static string ResolveFfmpegPath()
+    {
+        foreach (var candidate in new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
+        })
+            if (File.Exists(candidate)) return candidate;
+
+        var packages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WinGet", "Packages");
+        try
+        {
+            var installed = Directory.EnumerateDirectories(packages, "Gyan.FFmpeg.Essentials_*")
+                .SelectMany(directory => Directory.EnumerateFiles(directory, "ffmpeg.exe", SearchOption.AllDirectories))
+                .FirstOrDefault();
+            if (installed is not null) return installed;
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        return "ffmpeg.exe";
+    }
+
+    private static string ResolveYtDlpPath()
+    {
+        foreach (var candidate in new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "yt-dlp.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Microsoft", "WinGet", "Links", "yt-dlp.exe"),
+        })
+            if (File.Exists(candidate)) return candidate;
+
+        var packages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WinGet", "Packages");
+        try
+        {
+            var installed = Directory.EnumerateDirectories(packages, "yt-dlp.yt-dlp_*")
+                .SelectMany(directory => Directory.EnumerateFiles(directory, "yt-dlp.exe", SearchOption.AllDirectories))
+                .FirstOrDefault();
+            if (installed is not null) return installed;
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        return "yt-dlp.exe";
     }
 
     public async Task StopFileAsync()
@@ -614,6 +866,7 @@ public sealed class RoomSession : IAsyncDisposable
         _filePumpCts?.Cancel();
         _filePumpCts = null;
         _fileProducer = null;
+        _mixer.ClearLocalMedia();
         try { await _sig.EmitAckRawAsync("stop-file-stream", new { }); }
         catch (Exception ex) { Log?.Invoke($"stop-file-stream: {ex.Message}"); }
         Log?.Invoke("file streaming stopped");
