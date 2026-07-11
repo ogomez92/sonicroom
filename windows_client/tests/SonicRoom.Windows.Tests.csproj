@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.2" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="NAudio" Version="2.3.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -14,6 +15,7 @@
   <ItemGroup>
     <Compile Include="..\src\AppSettings.cs" Link="AppSettings.cs" />
     <Compile Include="..\src\Diag.cs" Link="Diag.cs" />
+    <Compile Include="..\src\Audio\PeerMixer.cs" Link="Audio\PeerMixer.cs" />
     <Compile Include="..\src\Audio\ProcessedFrameConverter.cs" Link="Audio\ProcessedFrameConverter.cs" />
     <Compile Include="..\src\Audio\VoiceProcessingSelection.cs" Link="Audio\VoiceProcessingSelection.cs" />
   </ItemGroup>

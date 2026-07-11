@@ -256,6 +256,7 @@ public sealed partial class MainWindow : Window
         ListenOnlyCheck.Content = I18n.T("listen_only");
         PublicCheck.Content = I18n.T("make_public");
         HifiCheck.Content = I18n.T("hifi_voice");
+        AutomationProperties.SetHelpText(HifiCheck, I18n.T("hifi_voice_help"));
         VoiceProcessingLobbyCheck.Content = I18n.T("voice_processing");
         VoiceProcessingCallCheck.Content = I18n.T("voice_processing");
         AutomationProperties.SetName(VoiceProcessingLobbyCheck, I18n.T("voice_processing"));

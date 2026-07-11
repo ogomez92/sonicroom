@@ -36,7 +36,8 @@
             <CheckBox x:Name="PublicCheck" Content="Make this room public (listed + vote-to-kick)" />
             <StackPanel Orientation="Horizontal" Spacing="16">
                 <CheckBox x:Name="HifiCheck" Content="Hi-fi voice (stereo, higher bitrate)"
-                          Click="OnHifiChanged" />
+                          Click="OnHifiChanged"
+                          AutomationProperties.HelpText="Applies from your next call. Cannot be combined with voice processing — checking one turns the other off" />
                 <CheckBox x:Name="VoiceProcessingLobbyCheck" Content="Voice processing"
                           Click="OnVoiceProcessingChanged"
                           AutomationProperties.HelpText="Echo cancellation and noise suppression; your microphone level is never changed" />

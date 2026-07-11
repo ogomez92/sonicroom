@@ -43,6 +43,10 @@ public static class I18n
         ["make_public"] = ("Make this room public (listed + vote-to-kick)", "Hacer pública esta sala (listada + expulsión por votos)", "Rendre ce salon public (listé + expulsion par vote)"),
         ["hifi_voice"] = ("Hi-fi voice (stereo, higher bitrate)", "Voz hi-fi (estéreo, mayor calidad)", "Voix hi-fi (stéréo, meilleur débit)"),
         ["hifi_next_call"] = ("Hi-fi voice applies from your next call.", "La voz hi-fi se aplicará en tu próxima llamada.", "La voix hi-fi s'appliquera à votre prochain appel."),
+        ["hifi_voice_help"] = (
+            "Applies from your next call. Cannot be combined with voice processing — checking one turns the other off",
+            "Se aplica en tu próxima llamada. No se puede combinar con el procesamiento de voz: al activar uno se desactiva el otro",
+            "S'applique à votre prochain appel. Incompatible avec le traitement de la voix : cocher l'un désactive l'autre"),
         ["voice_processing"] = ("Voice processing", "Procesamiento de voz", "Traitement de la voix"),
         ["voice_processing_help"] = (
             "Echo cancellation and noise suppression; your microphone level is never changed",
