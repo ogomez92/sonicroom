@@ -25,6 +25,7 @@ namespace SonicRoom.Windows;
 public sealed partial class MainWindow : Window
 {
     private const int ChatCap = 500;
+    private const double PercentScale = 100.0;
     // Max gap between two Alt+<same number> presses for the second to count as a
     // "copy that message" double-press rather than a fresh readback (mirrors the web client).
     private const int DoublePressMs = 600;
@@ -91,8 +92,8 @@ public sealed partial class MainWindow : Window
         RoomBox.Text = settings.Room;
         NameBox.Text = settings.DisplayName;
         HifiCheck.IsChecked = settings.HifiVoice;
-        MicGainSlider.Value = settings.MicGain;
-        MediaVolumeSlider.Value = settings.MediaVolume;
+        MicGainSlider.Value = ToPercent(settings.MicGain);
+        MediaVolumeSlider.Value = ToPercent(settings.MediaVolume);
         _micStereoByDevice = settings.MicStereoByDevice ?? new();
 
         // Land the keyboard where the next action is: the room name when a server is already
@@ -162,8 +163,8 @@ public sealed partial class MainWindow : Window
             SpeakerDevice = SpeakerSelect.SelectedIndex == 0 ? "System default" : (SpeakerSelect.SelectedItem as string ?? "System default"),
             Language = I18n.Lang,
             HifiVoice = HifiCheck.IsChecked == true,
-            MicGain = MicGainSlider.Value,
-            MediaVolume = MediaVolumeSlider.Value,
+            MicGain = ToGain(MicGainSlider.Value),
+            MediaVolume = ToGain(MediaVolumeSlider.Value),
             MicStereoByDevice = _micStereoByDevice,
         }.Save();
     }
@@ -830,8 +831,8 @@ public sealed partial class MainWindow : Window
         SaveSettings();
 
         session.HifiVoice = HifiCheck.IsChecked == true;
-        session.MicGain = (float)MicGainSlider.Value;
-        session.MediaVolume = (float)MediaVolumeSlider.Value;
+        session.MicGain = (float)ToGain(MicGainSlider.Value);
+        session.MediaVolume = (float)ToGain(MediaVolumeSlider.Value);
 
         var room = RoomBox.Text.Trim();
         try
@@ -970,23 +971,26 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnMasterVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
-        => _session?.SetMasterVolume((float)e.NewValue);
+        => _session?.SetMasterVolume((float)ToGain(e.NewValue));
 
     private void OnMicGainChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
-        if (_session is not null) _session.MicGain = (float)e.NewValue;
+        if (_session is not null) _session.MicGain = (float)ToGain(e.NewValue);
     }
 
     private void OnMediaVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
-        if (_session is not null) _session.MediaVolume = (float)e.NewValue;
+        if (_session is not null) _session.MediaVolume = (float)ToGain(e.NewValue);
     }
 
     private void OnPeerVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is PeerItem item)
-            _session?.SetPeerVolume(item.PeerId, (float)e.NewValue);
+            _session?.SetPeerVolume(item.PeerId, (float)ToGain(e.NewValue));
     }
+
+    private static double ToPercent(double gain) => gain * PercentScale;
+    private static double ToGain(double percent) => percent / PercentScale;
 
     private void OnLocalMuteClick(object sender, RoutedEventArgs e)
     {

@@ -105,8 +105,8 @@
                                                VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="2" Text="{Binding MuteLabel}" Opacity="0.55" VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="3" Text="{Binding VoteLabel}" Opacity="0.55" VerticalAlignment="Center" />
-                                    <Slider Grid.Column="4" Minimum="0" Maximum="2" StepFrequency="0.05"
-                                            Value="{Binding Volume, Mode=TwoWay}" ValueChanged="OnPeerVolumeChanged"
+                                    <Slider Grid.Column="4" Minimum="0" Maximum="200" StepFrequency="1"
+                                            Value="{Binding VolumePercent, Mode=TwoWay}" ValueChanged="OnPeerVolumeChanged"
                                             AutomationProperties.Name="{Binding VolumeLabel}"
                                             VerticalAlignment="Center" />
                                     <!-- Client-side mute of this one peer (my ears only). -->
@@ -259,15 +259,15 @@
             </ScrollViewer>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                 <TextBlock x:Name="MicGainLabel" Text="Mic gain" VerticalAlignment="Center" />
-                <Slider x:Name="MicGainSlider" Minimum="0" Maximum="4" StepFrequency="0.05" Value="1"
+                <Slider x:Name="MicGainSlider" Minimum="0" Maximum="400" StepFrequency="1" Value="100"
                         Width="120" VerticalAlignment="Center" ValueChanged="OnMicGainChanged"
                         AutomationProperties.Name="Microphone gain" />
                 <TextBlock x:Name="MediaVolumeLabel" Text="Media" VerticalAlignment="Center" />
-                <Slider x:Name="MediaVolumeSlider" Minimum="0" Maximum="2" StepFrequency="0.05" Value="1"
+                <Slider x:Name="MediaVolumeSlider" Minimum="0" Maximum="200" StepFrequency="1" Value="100"
                         Width="120" VerticalAlignment="Center" ValueChanged="OnMediaVolumeChanged"
                         AutomationProperties.Name="Media volume for you and remote listeners" />
                 <TextBlock x:Name="MasterLabel" Text="Master" VerticalAlignment="Center" />
-                <Slider x:Name="MasterVolume" Minimum="0" Maximum="2" StepFrequency="0.05" Value="1"
+                <Slider x:Name="MasterVolume" Minimum="0" Maximum="200" StepFrequency="1" Value="100"
                         Width="140" VerticalAlignment="Center" ValueChanged="OnMasterVolumeChanged"
                         AutomationProperties.Name="Master volume" />
             </StackPanel>

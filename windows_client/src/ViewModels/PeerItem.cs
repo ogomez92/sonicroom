@@ -29,11 +29,14 @@ public sealed class PeerItem : INotifyPropertyChanged
         set { _muted = value; Raise(); Raise(nameof(MuteLabel)); Raise(nameof(RowLabel)); }
     }
 
-    private double _volume = 1.0;
-    public double Volume
+    // UI-facing percentage. The audio session converts this to its existing 0-2 gain.
+    // Exposing 0-200 with one-point steps makes keyboard and screen-reader operation
+    // behave like a conventional Windows volume control while retaining 2x boost.
+    private double _volumePercent = 100.0;
+    public double VolumePercent
     {
-        get => _volume;
-        set { _volume = value; Raise(); }
+        get => _volumePercent;
+        set { _volumePercent = value; Raise(); }
     }
 
     /// <summary>Short status text shown next to the name ("muted" when the peer is muted).</summary>
