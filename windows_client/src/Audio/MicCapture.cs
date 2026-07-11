@@ -10,7 +10,7 @@ namespace SonicRoom.Windows.Audio;
 /// the OS/driver converts the device's native format to the requested one (WASAPI/process-loopback
 /// capture arrives in a later phase).
 /// </summary>
-public sealed class MicCapture : IDisposable
+internal sealed class MicCapture : IMicrophoneCapture
 {
     private const int FrameShorts = 960 * 2;
 

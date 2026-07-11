@@ -39,7 +39,7 @@ public sealed class RoomSession : IAsyncDisposable
     private MediasoupRpc? _rpc;
     private MediasoupSendTransport? _send;
     private MediasoupRecvTransport? _recv;
-    private MicCapture? _mic;
+    private IMicrophoneCapture? _mic;
     private OpusEncoder? _encoder;
     private WaveOutEvent? _output;
     private byte[] _encodeBuf = new byte[4000];
@@ -65,6 +65,8 @@ public sealed class RoomSession : IAsyncDisposable
     private bool _listenOnly;
     private bool _muted;
     private bool _deafened;
+    private bool _voiceEncoderStereo;
+    private readonly SemaphoreSlim _micSwitch = new(1, 1);
     private long _lastVoiceActiveMs; // Environment.TickCount64 of my last loud mic frame
 
     public event Action<string>? Log;
@@ -97,6 +99,10 @@ public sealed class RoomSession : IAsyncDisposable
     public event Action<string, string?>? FileTitleChanged;
     public event Action<string?>? FilePlaybackEnded;             // null = EOF, otherwise decoder error
     public event Action<bool, string?>? DuckingChangedEvent;     // enabled, by
+    /// <summary>Processed capture failed and the primary microphone was restored raw.</summary>
+    public event Action<int>? VoiceProcessingUnavailable;
+    /// <summary>A selected legacy Wave device could not be mapped and the default was used.</summary>
+    public event Action<string>? VoiceDeviceFallback;
 
     public bool IsRecording { get; private set; }
     /// <summary>Capability token for the download endpoints. Kept after the recording stops
@@ -110,6 +116,10 @@ public sealed class RoomSession : IAsyncDisposable
     /// <summary>Hi-fi voice opt-in: stereo ~128 kbps instead of the default mono ~64 kbps.
     /// Read at call start (the live producer's codec can't be renegotiated) — set before Connect.</summary>
     public bool HifiVoice { get; set; }
+
+    /// <summary>Desired voice-processing state before connect; active state thereafter.</summary>
+    public bool VoiceProcessingEnabled { get; set; }
+    public bool ActiveVoiceProcessing { get; private set; }
 
     /// <summary>Send-side mic boost (0–4×), applied before the soft limiter. Live-adjustable.</summary>
     public float MicGain { get; set; } = 1f;
@@ -130,6 +140,7 @@ public sealed class RoomSession : IAsyncDisposable
     public IReadOnlyDictionary<string, string> PeerNames => _peerNames;
 
     private int _micDeviceNumber = -1; // -1 = wave mapper (the Windows default input)
+    private int _speakerDeviceNumber = -1;
 
     public async Task ConnectAsync(string serverUrl, string room, string displayName,
         bool listenOnly = false, bool makePublic = false, int micDeviceNumber = -1,
@@ -137,6 +148,7 @@ public sealed class RoomSession : IAsyncDisposable
     {
         _listenOnly = listenOnly;
         _micDeviceNumber = micDeviceNumber;
+        _speakerDeviceNumber = speakerDeviceNumber;
         _shareBus.Log += m => Log?.Invoke($"[share] {m}");
 
         _output = new WaveOutEvent { DesiredLatency = 120, DeviceNumber = speakerDeviceNumber };
@@ -217,12 +229,87 @@ public sealed class RoomSession : IAsyncDisposable
         // mics are mono — so hi-fi is opt-in, read once at call start.
         _voiceProducer = await _send.ProduceAsync("voice", null,
             stereo: HifiVoice, maxAverageBitrate: HifiVoice ? 128000 : 64000);
-        _encoder = HifiVoice
+        _voiceEncoderStereo = HifiVoice;
+        _encoder = _voiceEncoderStereo
             ? new OpusEncoder(48000, 2, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = 128000 }
             : new OpusEncoder(48000, 1, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = 64000 };
-        _mic = new MicCapture(_micDeviceNumber);
-        _mic.FrameReady += OnMicFrame;
-        _mic.Start();
+        await ReplacePrimaryCaptureAsync(VoiceProcessingEnabled);
+    }
+
+    /// <summary>
+    /// Switches only the primary capture source. The send transport, producer, encoder, and room
+    /// connection remain intact; extra microphones are deliberately unaffected.
+    /// </summary>
+    public async Task SwitchVoiceProcessingAsync(bool enabled)
+    {
+        VoiceProcessingEnabled = enabled;
+        if (_listenOnly || _voiceProducer is null) { ActiveVoiceProcessing = false; return; }
+        await ReplacePrimaryCaptureAsync(enabled);
+    }
+
+    private async Task ReplacePrimaryCaptureAsync(bool processed)
+    {
+        await _micSwitch.WaitAsync();
+        try
+        {
+            var previous = _mic;
+            _mic = null;
+            if (previous is not null)
+            {
+                previous.FrameReady -= OnMicFrame;
+                previous.Dispose();
+            }
+
+            IMicrophoneCapture next;
+            if (processed)
+            {
+                ProcessedMicCapture? processedCapture = null;
+                try
+                {
+                    var capture = VoiceDeviceMapper.MapCapture(_micDeviceNumber);
+                    var render = VoiceDeviceMapper.MapRender(_speakerDeviceNumber);
+                    if (capture.FellBack) VoiceDeviceFallback?.Invoke("microphone");
+                    if (render.FellBack) VoiceDeviceFallback?.Invoke("speaker");
+                    processedCapture = new ProcessedMicCapture(capture.EndpointIndex, render.EndpointIndex);
+                    processedCapture.CaptureFailed += OnProcessedCaptureFailed;
+                    next = processedCapture;
+                    next.FrameReady += OnMicFrame;
+                    next.Start();
+                    ActiveVoiceProcessing = true;
+                    _mic = next;
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    processedCapture?.Dispose();
+                    var hr = System.Runtime.InteropServices.Marshal.GetHRForException(ex);
+                    Diag.Log($"Voice processing unavailable (HRESULT 0x{hr:X8})", ex);
+                    VoiceProcessingEnabled = false;
+                    ActiveVoiceProcessing = false;
+                    VoiceProcessingUnavailable?.Invoke(hr);
+                }
+            }
+
+            next = new MicCapture(_micDeviceNumber);
+            next.FrameReady += OnMicFrame;
+            next.Start();
+            _mic = next;
+            ActiveVoiceProcessing = false;
+        }
+        finally { _micSwitch.Release(); }
+    }
+
+    private void OnProcessedCaptureFailed(Exception ex)
+        => _ = RecoverFromProcessedCaptureFailureAsync(ex);
+
+    private async Task RecoverFromProcessedCaptureFailureAsync(Exception ex)
+    {
+        var hr = System.Runtime.InteropServices.Marshal.GetHRForException(ex);
+        Diag.Log($"Voice processing capture failed (HRESULT 0x{hr:X8})", ex);
+        VoiceProcessingEnabled = false;
+        ActiveVoiceProcessing = false;
+        VoiceProcessingUnavailable?.Invoke(hr);
+        await ReplacePrimaryCaptureAsync(processed: false);
     }
 
     private void OnMicFrame(short[] frame)
@@ -232,7 +319,7 @@ public sealed class RoomSession : IAsyncDisposable
         {
             var gain = MicGain;
             short[] pcm;
-            if (HifiVoice)
+            if (_voiceEncoderStereo)
             {
                 // Stereo hi-fi: gain + soft limiter in place on the interleaved frame.
                 if (gain != 1f)

@@ -44,6 +44,9 @@ public sealed partial class MainWindow : Window
     private bool _inCall;
     private bool _chatHintGiven;
     private bool _uiReady;
+    private bool _syncingVoiceMode;
+    private bool _rememberedMicUnavailable;
+    private bool _rememberedSpeakerUnavailable;
     private string _serverUrl = "";
     private string _roomName = "";
     // The last Alt+number readback (digit + when), so a quick second press of the
@@ -91,7 +94,10 @@ public sealed partial class MainWindow : Window
         ServerBox.Text = settings.ServerUrl;
         RoomBox.Text = settings.Room;
         NameBox.Text = settings.DisplayName;
-        HifiCheck.IsChecked = settings.HifiVoice;
+        var voiceProcessing = settings.VoiceProcessingEnabled;
+        HifiCheck.IsChecked = settings.HifiVoice && !voiceProcessing;
+        VoiceProcessingLobbyCheck.IsChecked = voiceProcessing;
+        VoiceProcessingCallCheck.IsChecked = voiceProcessing;
         MicGainSlider.Value = ToPercent(settings.MicGain);
         MediaVolumeSlider.Value = ToPercent(settings.MediaVolume);
         _micStereoByDevice = settings.MicStereoByDevice ?? new();
@@ -102,6 +108,8 @@ public sealed partial class MainWindow : Window
         {
             var target = string.IsNullOrWhiteSpace(ServerBox.Text) ? ServerBox : RoomBox;
             target.Focus(FocusState.Programmatic);
+            if (_rememberedMicUnavailable) Announce(I18n.T("remembered_mic_unavailable"));
+            if (_rememberedSpeakerUnavailable) Announce(I18n.T("remembered_speaker_unavailable"));
         };
         PopulateMicList(settings.MicDevice);
         PopulateSpeakerList(settings.SpeakerDevice);
@@ -163,6 +171,7 @@ public sealed partial class MainWindow : Window
             SpeakerDevice = SpeakerSelect.SelectedIndex == 0 ? "System default" : (SpeakerSelect.SelectedItem as string ?? "System default"),
             Language = I18n.Lang,
             HifiVoice = HifiCheck.IsChecked == true,
+            VoiceProcessingEnabled = VoiceProcessingLobbyCheck.IsChecked == true,
             MicGain = ToGain(MicGainSlider.Value),
             MediaVolume = ToGain(MediaVolumeSlider.Value),
             MicStereoByDevice = _micStereoByDevice,
@@ -181,11 +190,47 @@ public sealed partial class MainWindow : Window
         SaveSettings();
     }
 
-    private void OnHifiChanged(object sender, RoutedEventArgs e)
+    private async void OnHifiChanged(object sender, RoutedEventArgs e)
     {
+        if (_syncingVoiceMode) return;
+        var result = VoiceProcessingSelection.SetHifiVoice(
+            VoiceProcessingLobbyCheck.IsChecked == true, HifiCheck.IsChecked == true);
+        SyncVoiceProcessingChecks(result.VoiceProcessing);
+        if (result.OtherModeDisabled) Announce(I18n.T("voice_processing_disabled_for_hifi"));
         SaveSettings();
         // Like the web toggle: the live producer's codec can't be renegotiated mid-call.
         if (_inCall) Announce(I18n.T("hifi_next_call"));
+        if (_session is not null && result.OtherModeDisabled)
+            await _session.SwitchVoiceProcessingAsync(false);
+    }
+
+    private async void OnVoiceProcessingChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncingVoiceMode) return;
+        var enabled = sender is CheckBox check && check.IsChecked == true;
+        var result = VoiceProcessingSelection.SetVoiceProcessing(HifiCheck.IsChecked == true, enabled);
+        _syncingVoiceMode = true;
+        HifiCheck.IsChecked = result.HifiVoice;
+        _syncingVoiceMode = false;
+        SyncVoiceProcessingChecks(result.VoiceProcessing);
+        if (result.OtherModeDisabled) Announce(I18n.T("hifi_disabled_for_voice_processing"));
+        SaveSettings();
+
+        if (_testCap is not null)
+        {
+            StopMicTest();
+            StartMicTest(announceStart: false);
+        }
+        if (_session is not null)
+            await _session.SwitchVoiceProcessingAsync(enabled);
+    }
+
+    private void SyncVoiceProcessingChecks(bool enabled)
+    {
+        _syncingVoiceMode = true;
+        VoiceProcessingLobbyCheck.IsChecked = enabled;
+        VoiceProcessingCallCheck.IsChecked = enabled;
+        _syncingVoiceMode = false;
     }
 
     /// <summary>(Re)apply every localized string. Called at startup and on language switch, so
@@ -211,6 +256,12 @@ public sealed partial class MainWindow : Window
         ListenOnlyCheck.Content = I18n.T("listen_only");
         PublicCheck.Content = I18n.T("make_public");
         HifiCheck.Content = I18n.T("hifi_voice");
+        VoiceProcessingLobbyCheck.Content = I18n.T("voice_processing");
+        VoiceProcessingCallCheck.Content = I18n.T("voice_processing");
+        AutomationProperties.SetName(VoiceProcessingLobbyCheck, I18n.T("voice_processing"));
+        AutomationProperties.SetName(VoiceProcessingCallCheck, I18n.T("voice_processing"));
+        AutomationProperties.SetHelpText(VoiceProcessingLobbyCheck, I18n.T("voice_processing_help"));
+        AutomationProperties.SetHelpText(VoiceProcessingCallCheck, I18n.T("voice_processing_help"));
         ConnectButton.Content = I18n.T("join_call");
         AutomationProperties.SetName(ConnectStatus, I18n.T("connection_status"));
         PublicRoomsHeader.Text = I18n.T("public_rooms");
@@ -330,7 +381,7 @@ public sealed partial class MainWindow : Window
     // Combo index → (WaveIn/WaveOut device number, product name); slot 0 is the Windows default.
     private List<(int Index, string Name)> _micDevices = new();
     private List<(int Index, string Name)> _speakerDevices = new();
-    private MicCapture? _testCap;
+    private IMicrophoneCapture? _testCap;
     private WaveOutEvent? _testOut;
     private BufferedWaveProvider? _testBuf;
     private int _testFrameCount;
@@ -343,6 +394,7 @@ public sealed partial class MainWindow : Window
         MicSelect.Items.Add(I18n.T("system_default"));
         foreach (var (_, name) in _micDevices.Skip(1)) MicSelect.Items.Add(name);
         var idx = preferName is null or "System default" ? 0 : _micDevices.FindIndex(d => d.Name == preferName);
+        _rememberedMicUnavailable = preferName is not null and not "System default" && idx < 0;
         MicSelect.SelectedIndex = idx >= 0 ? idx : 0;
     }
 
@@ -354,6 +406,7 @@ public sealed partial class MainWindow : Window
         SpeakerSelect.Items.Add(I18n.T("system_default"));
         foreach (var (_, name) in _speakerDevices.Skip(1)) SpeakerSelect.Items.Add(name);
         var idx = preferName is null or "System default" ? 0 : _speakerDevices.FindIndex(d => d.Name == preferName);
+        _rememberedSpeakerUnavailable = preferName is not null and not "System default" && idx < 0;
         SpeakerSelect.SelectedIndex = idx >= 0 ? idx : 0;
     }
 
@@ -394,6 +447,11 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        StartMicTest(announceStart: true);
+    }
+
+    private void StartMicTest(bool announceStart)
+    {
         var (dev, name) = SelectedMic();
         try
         {
@@ -402,12 +460,38 @@ public sealed partial class MainWindow : Window
             _testOut = new WaveOutEvent { DesiredLatency = 120, DeviceNumber = SelectedSpeaker().Index };
             _testOut.Init(_testBuf);
             _testOut.Play();
-            _testCap = new MicCapture(dev);
-            _testCap.FrameReady += OnTestFrame;
-            _testCap.Start();
+            if (VoiceProcessingLobbyCheck.IsChecked == true)
+            {
+                try
+                {
+                    var capture = VoiceDeviceMapper.MapCapture(dev);
+                    var render = VoiceDeviceMapper.MapRender(SelectedSpeaker().Index);
+                    if (capture.FellBack) Announce(I18n.T("remembered_mic_unavailable"));
+                    if (render.FellBack) Announce(I18n.T("remembered_speaker_unavailable"));
+                    _testCap = new ProcessedMicCapture(capture.EndpointIndex, render.EndpointIndex);
+                    _testCap.FrameReady += OnTestFrame;
+                    _testCap.Start();
+                }
+                catch (Exception ex)
+                {
+                    var hr = System.Runtime.InteropServices.Marshal.GetHRForException(ex);
+                    Diag.Log($"Mic test voice processing unavailable (HRESULT 0x{hr:X8})", ex);
+                    _testCap?.Dispose();
+                    _testCap = null;
+                    SyncVoiceProcessingChecks(false);
+                    SaveSettings();
+                    Announce(I18n.T("voice_processing_unavailable"));
+                }
+            }
+            if (_testCap is null)
+            {
+                _testCap = new MicCapture(dev);
+                _testCap.FrameReady += OnTestFrame;
+                _testCap.Start();
+            }
             MicTestButton.Content = I18n.T("mic_test_stop");
             MicTestButton.IsChecked = true;
-            Announce(I18n.F("testing_mic", name));
+            if (announceStart) Announce(I18n.F("testing_mic", name));
         }
         catch (Exception ex)
         {
@@ -639,6 +723,14 @@ public sealed partial class MainWindow : Window
         var session = new RoomSession();
         _session = session;
         session.Log += s => { Diag.Log($"[session] {s}"); Enqueue(() => CallStatus.Text = s); };
+        session.VoiceProcessingUnavailable += _ => Enqueue(() =>
+        {
+            SyncVoiceProcessingChecks(false);
+            SaveSettings();
+            Announce(I18n.T("voice_processing_unavailable"));
+        });
+        session.VoiceDeviceFallback += device => Enqueue(() => Announce(I18n.T(
+            device == "microphone" ? "remembered_mic_unavailable" : "remembered_speaker_unavailable")));
         session.PeerJoined += p => Enqueue(() =>
         {
             if (Find(p.PeerId) is null) _peers.Add(TrackRowLabel(new PeerItem(p.PeerId, p.DisplayName)));
@@ -831,6 +923,7 @@ public sealed partial class MainWindow : Window
         SaveSettings();
 
         session.HifiVoice = HifiCheck.IsChecked == true;
+        session.VoiceProcessingEnabled = VoiceProcessingLobbyCheck.IsChecked == true;
         session.MicGain = (float)ToGain(MicGainSlider.Value);
         session.MediaVolume = (float)ToGain(MediaVolumeSlider.Value);
 
@@ -850,6 +943,7 @@ public sealed partial class MainWindow : Window
             StreamButton.Content = session.IsStreaming ? I18n.T("stop_streaming") : I18n.T("stream");
             DuckButton.IsChecked = session.DuckingEnabled;
             MicGainSlider.IsEnabled = ListenOnlyCheck.IsChecked != true;
+            VoiceProcessingCallCheck.IsEnabled = ListenOnlyCheck.IsChecked != true;
             UpdateDownloadVisibility();
             ConnectScroll.Visibility = Visibility.Collapsed;
             CallPanel.Visibility = Visibility.Visible;

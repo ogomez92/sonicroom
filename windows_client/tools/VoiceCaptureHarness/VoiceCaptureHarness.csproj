@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.3.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\..\src\Audio\IMicrophoneCapture.cs" Link="Audio\IMicrophoneCapture.cs" />
+    <Compile Include="..\..\src\Audio\ProcessedFrameConverter.cs" Link="Audio\ProcessedFrameConverter.cs" />
+    <Compile Include="..\..\src\Audio\ProcessedMicCapture.cs" Link="Audio\ProcessedMicCapture.cs" />
+    <Compile Include="..\..\src\Audio\VoiceDeviceMapper.cs" Link="Audio\VoiceDeviceMapper.cs" />
+  </ItemGroup>
+</Project>

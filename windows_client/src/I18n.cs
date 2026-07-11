@@ -43,6 +43,31 @@ public static class I18n
         ["make_public"] = ("Make this room public (listed + vote-to-kick)", "Hacer pública esta sala (listada + expulsión por votos)", "Rendre ce salon public (listé + expulsion par vote)"),
         ["hifi_voice"] = ("Hi-fi voice (stereo, higher bitrate)", "Voz hi-fi (estéreo, mayor calidad)", "Voix hi-fi (stéréo, meilleur débit)"),
         ["hifi_next_call"] = ("Hi-fi voice applies from your next call.", "La voz hi-fi se aplicará en tu próxima llamada.", "La voix hi-fi s'appliquera à votre prochain appel."),
+        ["voice_processing"] = ("Voice processing", "Procesamiento de voz", "Traitement de la voix"),
+        ["voice_processing_help"] = (
+            "Echo cancellation, noise suppression, and automatic microphone level",
+            "Cancelación de eco, reducción de ruido y nivel automático del micrófono",
+            "Annulation de l'écho, suppression du bruit et niveau automatique du microphone"),
+        ["hifi_disabled_for_voice_processing"] = (
+            "Hi-fi voice was turned off because voice processing was enabled.",
+            "La voz hi-fi se ha desactivado porque se activó el procesamiento de voz.",
+            "La voix hi-fi a été désactivée car le traitement de la voix a été activé."),
+        ["voice_processing_disabled_for_hifi"] = (
+            "Voice processing was turned off because hi-fi voice was enabled.",
+            "El procesamiento de voz se ha desactivado porque se activó la voz hi-fi.",
+            "Le traitement de la voix a été désactivé car la voix hi-fi a été activée."),
+        ["voice_processing_unavailable"] = (
+            "Voice processing is unavailable. The raw microphone has been restored.",
+            "El procesamiento de voz no está disponible. Se ha restaurado el micrófono sin procesar.",
+            "Le traitement de la voix n'est pas disponible. Le microphone brut a été rétabli."),
+        ["remembered_mic_unavailable"] = (
+            "The selected microphone is unavailable. The system default microphone will be used.",
+            "El micrófono seleccionado no está disponible. Se usará el micrófono predeterminado del sistema.",
+            "Le microphone sélectionné n'est pas disponible. Le microphone par défaut du système sera utilisé."),
+        ["remembered_speaker_unavailable"] = (
+            "The selected speaker is unavailable. The system default speaker will be used.",
+            "El altavoz seleccionado no está disponible. Se usará el altavoz predeterminado del sistema.",
+            "Le haut-parleur sélectionné n'est pas disponible. Le haut-parleur par défaut du système sera utilisé."),
         ["join_call"] = ("Join call", "Unirse a la llamada", "Rejoindre l'appel"),
         ["connection_status"] = ("Connection status", "Estado de la conexión", "État de la connexion"),
         ["connecting"] = ("Connecting…", "Conectando…", "Connexion…"),

@@ -67,6 +67,12 @@ dotnet run -p:Platform=x64
 - **Voice quality matches the web client**: mono ~64 kbps by default, with a persisted
   **hi-fi voice** opt-in (stereo ~128 kbps, applied at the next call). A send-side
   **mic gain** (0–4×) runs through a soft limiter, like the web's boost + compressor.
+- **Voice processing** is a persisted, default-off option for the primary microphone. It uses
+  Windows' built-in Voice Capture DSP for acoustic echo cancellation, noise suppression, and
+  automatic microphone level; no cloud service or additional native binary is involved. It can
+  be changed live without leaving the room and is also used by the microphone test. Processing
+  produces mono 16 kHz speech-band audio (resampled to the call's 48 kHz frame contract), so it
+  is mutually exclusive with hi-fi voice. Extra microphones and shared/media audio stay raw.
 - **Speaking indicators** — a per-peer dot lights while a voice is active (RMS detection in
   the mixer), and **Ctrl+W / "Who's speaking"** announces the current talkers on demand.
 - **Global keyboard shortcuts** (work when unfocused): Ctrl+Shift+M mute, Ctrl+Shift+D deafen,
@@ -102,8 +108,20 @@ dotnet run -p:Platform=x64
   **Prism**, a permanent read-only chat transcript, Alt+number chat readback, and UIA
   labels on every control.
 - **Persisted settings** (`%LOCALAPPDATA%\SonicRoom\settings.json`: server/room/name, mic +
-  speaker device, language, hi-fi voice, mic gain) and a diagnostics log
+  speaker device, language, hi-fi voice, voice processing, mic gain) and a diagnostics log
   (`%LOCALAPPDATA%\SonicRoom\log.txt`).
+
+If a remembered input or output endpoint is unavailable, voice processing uses the current
+Windows communications default and announces the fallback. If `Mfwmaaec.dll` or the DSP cannot
+initialize, the client logs the HRESULT, turns Voice processing off, announces the failure, and
+immediately restores ordinary NAudio microphone capture.
+
+The hardware DSP smoke test uses the default microphone and speaker, validates exact nonzero
+20 ms frames, and verifies clean shutdown:
+
+```powershell
+dotnet run --project tools/VoiceCaptureHarness/VoiceCaptureHarness.csproj -- 10
+```
 
 The whole engine is `src/Session/RoomSession.cs`; the transport is `src/Transport/` (SIPSorcery +
 a hand-rolled mediasoup handshake — see the repo memory notes). Opus is always signaled as

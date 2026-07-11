@@ -34,8 +34,13 @@
             </Grid>
             <CheckBox x:Name="ListenOnlyCheck" Content="Listen only (no microphone)" />
             <CheckBox x:Name="PublicCheck" Content="Make this room public (listed + vote-to-kick)" />
-            <CheckBox x:Name="HifiCheck" Content="Hi-fi voice (stereo, higher bitrate)"
-                      Click="OnHifiChanged" />
+            <StackPanel Orientation="Horizontal" Spacing="16">
+                <CheckBox x:Name="HifiCheck" Content="Hi-fi voice (stereo, higher bitrate)"
+                          Click="OnHifiChanged" />
+                <CheckBox x:Name="VoiceProcessingLobbyCheck" Content="Voice processing"
+                          Click="OnVoiceProcessingChanged"
+                          AutomationProperties.HelpText="Echo cancellation, noise suppression, and automatic microphone level" />
+            </StackPanel>
             <Button x:Name="ConnectButton" Content="Join call" Click="OnConnectClick"
                     Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Stretch" />
             <TextBlock x:Name="ConnectStatus" Opacity="0.7" TextWrapping="Wrap"
@@ -262,6 +267,9 @@
                 <Slider x:Name="MicGainSlider" Minimum="0" Maximum="400" StepFrequency="1" Value="100"
                         Width="120" VerticalAlignment="Center" ValueChanged="OnMicGainChanged"
                         AutomationProperties.Name="Microphone gain" />
+                <CheckBox x:Name="VoiceProcessingCallCheck" Content="Voice processing"
+                          VerticalAlignment="Center" Click="OnVoiceProcessingChanged"
+                          AutomationProperties.HelpText="Echo cancellation, noise suppression, and automatic microphone level" />
                 <TextBlock x:Name="MediaVolumeLabel" Text="Media" VerticalAlignment="Center" />
                 <Slider x:Name="MediaVolumeSlider" Minimum="0" Maximum="200" StepFrequency="1" Value="100"
                         Width="120" VerticalAlignment="Center" ValueChanged="OnMediaVolumeChanged"
