@@ -135,7 +135,7 @@
   "settings_speaker_fallback": "Altavoces {n}",
   "settings_labels_hint": "Los nombres de los dispositivos aparecen al conceder acceso al micrófono.",
   "settings_voice_processing_label": "Procesamiento de voz",
-  "settings_voice_processing_hint": "Control de eco, limpieza de ruido y nivel automático",
+  "settings_voice_processing_hint": "Control de eco, limpieza de ruido y nivel automático. Si el navegador lo permite, la cancelación de eco también elimina el audio del lector de pantalla y del sistema",
   "settings_hifi_voice_label": "Voz de alta fidelidad (estéreo)",
   "settings_hifi_voice_hint": "Envía estéreo a mayor bitrate. Consume más datos; se aplica en tu próxima llamada",
   "settings_extra_mics_label": "Micrófonos adicionales para emitir",
