@@ -76,13 +76,17 @@ internal sealed class ProcessedMicCapture : IMicrophoneCapture
                 ?? throw new COMException("Could not create the Windows Voice Capture DSP.");
 
             var store = (IPropertyStoreNative)comObject;
-            SetInt(store, PidFirstUsable + 0, 0); // SINGLE_CHANNEL_AEC; NS/AGC are enabled too.
+            SetInt(store, PidFirstUsable + 0, 0); // SINGLE_CHANNEL_AEC
             SetBool(store, PidFirstUsable + 1, true); // source mode
             SetInt(store, PidFirstUsable + 2,
                 (_renderEndpointIndex << 16) | (_captureEndpointIndex & 0xffff));
             SetBool(store, PidFirstUsable + 3, true); // feature mode permits overrides below
-            SetInt(store, PidFirstUsable + 6, 1); // noise suppression uses VT_I4, unlike AGC
-            SetBool(store, PidFirstUsable + 7, true); // automatic gain control
+            SetInt(store, PidFirstUsable + 6, 1); // noise suppression uses VT_I4
+            // AGC (+7) stays at its default (off): level control belongs to the user's mic
+            // gain slider, not the DSP. The mic gain bounder (+19, MIC_GAIN_BOUNDER) defaults
+            // ON in source mode and moves the WINDOWS endpoint mic level itself — it was
+            // observed driving the mic volume way down and leaving it there, so disable it.
+            SetBool(store, PidFirstUsable + 19, false); // never touch the endpoint mic level
             // This DSP applies SetValue immediately and its IPropertyStore::Commit returns
             // E_NOTIMPL on current Windows builds.
 

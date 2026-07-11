@@ -20,7 +20,8 @@ public sealed class AppSettings
     /// <summary>Hi-fi voice opt-in: stereo ~128 kbps voice instead of the default mono ~64 kbps.
     /// Same trade-off as the web toggle — most mics are mono, and 128k costs every listener.</summary>
     public bool HifiVoice { get; set; }
-    /// <summary>Windows Voice Capture DSP (AEC, noise suppression, and AGC), default off.</summary>
+    /// <summary>Windows Voice Capture DSP (AEC + noise suppression; no AGC, and the mic gain
+    /// bounder is disabled so the endpoint mic level is never touched), default off.</summary>
     public bool VoiceProcessingEnabled { get; set; }
     /// <summary>Send-side mic boost (0–4×) applied before the soft limiter, like the web's micGain.</summary>
     public double MicGain { get; set; } = 1.0;

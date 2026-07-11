@@ -68,8 +68,11 @@ dotnet run -p:Platform=x64
   **hi-fi voice** opt-in (stereo ~128 kbps, applied at the next call). A send-side
   **mic gain** (0–4×) runs through a soft limiter, like the web's boost + compressor.
 - **Voice processing** is a persisted, default-off option for the primary microphone. It uses
-  Windows' built-in Voice Capture DSP for acoustic echo cancellation, noise suppression, and
-  automatic microphone level; no cloud service or additional native binary is involved. It can
+  Windows' built-in Voice Capture DSP for acoustic echo cancellation and noise suppression; no
+  cloud service or additional native binary is involved. The DSP's automatic gain control and
+  microphone gain bounder are deliberately left off — the DSP would otherwise adjust the
+  Windows microphone level itself (observed driving it way down); level control stays with the
+  user's mic gain slider. It can
   be changed live without leaving the room and is also used by the microphone test. Processing
   produces mono 16 kHz speech-band audio (resampled to the call's 48 kHz frame contract), so it
   is mutually exclusive with hi-fi voice. Extra microphones and shared/media audio stay raw.

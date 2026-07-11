@@ -45,9 +45,9 @@ public static class I18n
         ["hifi_next_call"] = ("Hi-fi voice applies from your next call.", "La voz hi-fi se aplicará en tu próxima llamada.", "La voix hi-fi s'appliquera à votre prochain appel."),
         ["voice_processing"] = ("Voice processing", "Procesamiento de voz", "Traitement de la voix"),
         ["voice_processing_help"] = (
-            "Echo cancellation, noise suppression, and automatic microphone level",
-            "Cancelación de eco, reducción de ruido y nivel automático del micrófono",
-            "Annulation de l'écho, suppression du bruit et niveau automatique du microphone"),
+            "Echo cancellation and noise suppression; your microphone level is never changed",
+            "Cancelación de eco y reducción de ruido; el nivel del micrófono nunca se modifica",
+            "Annulation de l'écho et suppression du bruit ; le niveau du microphone n'est jamais modifié"),
         ["hifi_disabled_for_voice_processing"] = (
             "Hi-fi voice was turned off because voice processing was enabled.",
             "La voz hi-fi se ha desactivado porque se activó el procesamiento de voz.",
