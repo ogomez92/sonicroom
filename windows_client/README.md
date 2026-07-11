@@ -32,6 +32,9 @@ from a native Settings store.
 - .NET 9 SDK.
 - The Windows App SDK runtime (installed with the VS "Windows App SDK" component, or run a
   self-contained build — see Packaging, later phase).
+- [FFmpeg](https://ffmpeg.org/) for media playback (`winget install Gyan.FFmpeg.Essentials`).
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) for YouTube watch-link playback
+  (`winget install yt-dlp.yt-dlp`).
 
 ## Layout
 
@@ -64,6 +67,15 @@ dotnet run -p:Platform=x64
 - **Voice quality matches the web client**: mono ~64 kbps by default, with a persisted
   **hi-fi voice** opt-in (stereo ~128 kbps, applied at the next call). A send-side
   **mic gain** (0–4×) runs through a soft limiter, like the web's boost + compressor.
+- **Voice processing** is a persisted, default-off option for the primary microphone. It uses
+  Windows' built-in Voice Capture DSP for acoustic echo cancellation and noise suppression; no
+  cloud service or additional native binary is involved. The DSP's automatic gain control and
+  microphone gain bounder are deliberately left off — the DSP would otherwise adjust the
+  Windows microphone level itself (observed driving it way down); level control stays with the
+  user's mic gain slider. It can
+  be changed live without leaving the room and is also used by the microphone test. Processing
+  produces mono 16 kHz speech-band audio (resampled to the call's 48 kHz frame contract), so it
+  is mutually exclusive with hi-fi voice. Extra microphones and shared/media audio stay raw.
 - **Speaking indicators** — a per-peer dot lights while a voice is active (RMS detection in
   the mixer), and **Ctrl+W / "Who's speaking"** announces the current talkers on demand.
 - **Global keyboard shortcuts** (work when unfocused): Ctrl+Shift+M mute, Ctrl+Shift+D deafen,
@@ -73,9 +85,12 @@ dotnet run -p:Platform=x64
 - **Extra microphones** — stream additional input devices, each its own `mic` producer, with a
   per-device **mono/stereo** choice (persisted by device name; flipping it on a live mic
   restarts that producer, since a codec layout can't be renegotiated).
-- **File playback** — play a local audio file into the call as a `file` producer; **Change
-  file** swaps the content on the live producer (no stop/start — listeners just see the title
-  update via `update-stream-title`, like the web client).
+- **Media playback** — play the audio track from any FFmpeg-supported local media file, a direct
+  HTTP/HTTPS media stream, or a YouTube watch link into the call as a `file` producer. **Change
+  media** swaps content on the live producer (no stop/start — listeners just see the title update
+  via `update-stream-title`, like the web client). Outgoing media is also monitored through the
+  selected local speaker and follows master volume, deafen, and auto-ducking. A persisted media
+  volume slider controls both the local monitor and the audio sent to remote listeners.
 - **Recording** with **download** (mixed OGG or per-track ZIP via the recording token; the
   link survives stop and clears on `recording-expired`) and **Icecast live streaming** —
   start/stop, room-wide LIVE state.
@@ -96,8 +111,20 @@ dotnet run -p:Platform=x64
   **Prism**, a permanent read-only chat transcript, Alt+number chat readback, and UIA
   labels on every control.
 - **Persisted settings** (`%LOCALAPPDATA%\SonicRoom\settings.json`: server/room/name, mic +
-  speaker device, language, hi-fi voice, mic gain) and a diagnostics log
+  speaker device, language, hi-fi voice, voice processing, mic gain) and a diagnostics log
   (`%LOCALAPPDATA%\SonicRoom\log.txt`).
+
+If a remembered input or output endpoint is unavailable, voice processing uses the current
+Windows communications default and announces the fallback. If `Mfwmaaec.dll` or the DSP cannot
+initialize, the client logs the HRESULT, turns Voice processing off, announces the failure, and
+immediately restores ordinary NAudio microphone capture.
+
+The hardware DSP smoke test uses the default microphone and speaker, validates exact nonzero
+20 ms frames, and verifies clean shutdown:
+
+```powershell
+dotnet run --project tools/VoiceCaptureHarness/VoiceCaptureHarness.csproj -- 10
+```
 
 The whole engine is `src/Session/RoomSession.cs`; the transport is `src/Transport/` (SIPSorcery +
 a hand-rolled mediasoup handshake — see the repo memory notes). Opus is always signaled as

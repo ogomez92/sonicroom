@@ -166,10 +166,12 @@ describe("join — P2P mesh (≤2 peers)", () => {
     const h = await joinRoom({ join: { mode: "p2p", peers: [] } });
     const constraints = mediaController.userMediaCalls[0].audio as {
       deviceId?: { ideal?: string };
-      echoCancellation?: boolean;
+      echoCancellation?: { ideal?: string };
     };
     expect(constraints.deviceId?.ideal).toBe("mic-1");
-    expect(constraints.echoCancellation).toBe(true);
+    // Voice processing requests the strongest echo-cancel mode as an ideal
+    // ("all", Chrome 141+); older browsers coerce it to boolean true.
+    expect(constraints.echoCancellation).toEqual({ ideal: "all" });
     h.unmount();
   });
 });

@@ -135,7 +135,7 @@
   "settings_speaker_fallback": "Haut-parleurs {n}",
   "settings_labels_hint": "Les noms des appareils apparaissent une fois l'accès au micro accordé.",
   "settings_voice_processing_label": "Traitement de la voix",
-  "settings_voice_processing_hint": "Contrôle de l'écho, réduction du bruit et niveau automatique",
+  "settings_voice_processing_hint": "Contrôle de l'écho, réduction du bruit et niveau automatique. Si le navigateur le permet, l'annulation de l'écho supprime aussi l'audio du lecteur d'écran et du système",
   "settings_hifi_voice_label": "Voix haute-fidélité (stéréo)",
   "settings_hifi_voice_hint": "Envoie en stéréo à un débit plus élevé. Consomme plus de données ; appliqué au prochain appel",
   "settings_extra_mics_label": "Micros supplémentaires à diffuser",

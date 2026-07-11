@@ -16,6 +16,16 @@ export const isIOS =
 // (forcing a rate a route can't honour garbles capture); WebRTC/Opus negotiates
 // its own rate regardless. The device is `ideal`, not `exact`, so a
 // remembered-but-unplugged mic falls back to the default instead of failing.
+// Echo cancellation strength: `"all"` (Chrome 141+, spec'd in mediacapture-main)
+// cancels ALL system playout from the mic signal — screen-reader speech (NVDA/
+// Eloquence), notifications, other apps — not just audio this tab plays, which is
+// all the boolean form's browser AEC can reference. Requested as `ideal`, so it
+// can never fail the getUserMedia call; browsers that predate the string form
+// coerce "all" to boolean `true` (WebIDL ToBoolean), i.e. they fall back to their
+// standard browser AEC automatically. Callers can read the applied mode back via
+// track.getSettings().echoCancellation ("all" / "remote-only" / true / false).
+export const ECHO_CANCEL_ALL = { ideal: "all" } as unknown as ConstrainBoolean;
+
 export function microphoneConstraints(
   deviceId: string,
   voiceProcessingEnabled: boolean,
@@ -24,7 +34,7 @@ export function microphoneConstraints(
   return {
     channelCount: hifiVoice ? 2 : 1,
     ...(isIOS ? {} : { sampleRate: 48000 }),
-    echoCancellation: voiceProcessingEnabled,
+    echoCancellation: voiceProcessingEnabled ? ECHO_CANCEL_ALL : false,
     noiseSuppression: voiceProcessingEnabled,
     autoGainControl: voiceProcessingEnabled,
     ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),

@@ -34,8 +34,14 @@
             </Grid>
             <CheckBox x:Name="ListenOnlyCheck" Content="Listen only (no microphone)" />
             <CheckBox x:Name="PublicCheck" Content="Make this room public (listed + vote-to-kick)" />
-            <CheckBox x:Name="HifiCheck" Content="Hi-fi voice (stereo, higher bitrate)"
-                      Click="OnHifiChanged" />
+            <StackPanel Orientation="Horizontal" Spacing="16">
+                <CheckBox x:Name="HifiCheck" Content="Hi-fi voice (stereo, higher bitrate)"
+                          Click="OnHifiChanged"
+                          AutomationProperties.HelpText="Applies from your next call. Cannot be combined with voice processing — checking one turns the other off" />
+                <CheckBox x:Name="VoiceProcessingLobbyCheck" Content="Voice processing"
+                          Click="OnVoiceProcessingChanged"
+                          AutomationProperties.HelpText="Echo cancellation and noise suppression; your microphone level is never changed" />
+            </StackPanel>
             <Button x:Name="ConnectButton" Content="Join call" Click="OnConnectClick"
                     Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Stretch" />
             <TextBlock x:Name="ConnectStatus" Opacity="0.7" TextWrapping="Wrap"
@@ -105,8 +111,8 @@
                                                VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="2" Text="{Binding MuteLabel}" Opacity="0.55" VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="3" Text="{Binding VoteLabel}" Opacity="0.55" VerticalAlignment="Center" />
-                                    <Slider Grid.Column="4" Minimum="0" Maximum="2" StepFrequency="0.05"
-                                            Value="{Binding Volume, Mode=TwoWay}" ValueChanged="OnPeerVolumeChanged"
+                                    <Slider Grid.Column="4" Minimum="0" Maximum="200" StepFrequency="1"
+                                            Value="{Binding VolumePercent, Mode=TwoWay}" ValueChanged="OnPeerVolumeChanged"
                                             AutomationProperties.Name="{Binding VolumeLabel}"
                                             VerticalAlignment="Center" />
                                     <!-- Client-side mute of this one peer (my ears only). -->
@@ -219,14 +225,14 @@
                         <KeyboardAccelerator Modifiers="Control" Key="E" ScopeOwner="{x:Bind CallPanel}" />
                     </Button.KeyboardAccelerators>
                 </Button>
-                <Button x:Name="FileButton" Content="Play file" Click="OnFileClick">
+                <Button x:Name="FileButton" Content="Play media" Click="OnFileClick">
                     <Button.KeyboardAccelerators>
                         <KeyboardAccelerator Modifiers="Control" Key="F" ScopeOwner="{x:Bind CallPanel}" />
                     </Button.KeyboardAccelerators>
                 </Button>
-                <!-- Swap the streamed file in place (same producer, listeners see one continuous
+                <!-- Swap the streamed media in place (same producer, listeners see one continuous
                      stream). Visible only while a file is streaming. -->
-                <Button x:Name="ChangeFileButton" Content="Change file" Click="OnChangeFileClick"
+                <Button x:Name="ChangeFileButton" Content="Change media" Click="OnChangeFileClick"
                         Visibility="Collapsed" />
                 <Button x:Name="RecordButton" Content="Record" Click="OnRecordClick">
                     <Button.KeyboardAccelerators>
@@ -259,11 +265,18 @@
             </ScrollViewer>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                 <TextBlock x:Name="MicGainLabel" Text="Mic gain" VerticalAlignment="Center" />
-                <Slider x:Name="MicGainSlider" Minimum="0" Maximum="4" StepFrequency="0.05" Value="1"
+                <Slider x:Name="MicGainSlider" Minimum="0" Maximum="400" StepFrequency="1" Value="100"
                         Width="120" VerticalAlignment="Center" ValueChanged="OnMicGainChanged"
                         AutomationProperties.Name="Microphone gain" />
+                <CheckBox x:Name="VoiceProcessingCallCheck" Content="Voice processing"
+                          VerticalAlignment="Center" Click="OnVoiceProcessingChanged"
+                          AutomationProperties.HelpText="Echo cancellation and noise suppression; your microphone level is never changed" />
+                <TextBlock x:Name="MediaVolumeLabel" Text="Media" VerticalAlignment="Center" />
+                <Slider x:Name="MediaVolumeSlider" Minimum="0" Maximum="200" StepFrequency="1" Value="100"
+                        Width="120" VerticalAlignment="Center" ValueChanged="OnMediaVolumeChanged"
+                        AutomationProperties.Name="Media volume for you and remote listeners" />
                 <TextBlock x:Name="MasterLabel" Text="Master" VerticalAlignment="Center" />
-                <Slider x:Name="MasterVolume" Minimum="0" Maximum="2" StepFrequency="0.05" Value="1"
+                <Slider x:Name="MasterVolume" Minimum="0" Maximum="200" StepFrequency="1" Value="100"
                         Width="140" VerticalAlignment="Center" ValueChanged="OnMasterVolumeChanged"
                         AutomationProperties.Name="Master volume" />
             </StackPanel>

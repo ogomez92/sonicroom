@@ -25,6 +25,7 @@ namespace SonicRoom.Windows;
 public sealed partial class MainWindow : Window
 {
     private const int ChatCap = 500;
+    private const double PercentScale = 100.0;
     // Max gap between two Alt+<same number> presses for the second to count as a
     // "copy that message" double-press rather than a fresh readback (mirrors the web client).
     private const int DoublePressMs = 600;
@@ -43,6 +44,9 @@ public sealed partial class MainWindow : Window
     private bool _inCall;
     private bool _chatHintGiven;
     private bool _uiReady;
+    private bool _syncingVoiceMode;
+    private bool _rememberedMicUnavailable;
+    private bool _rememberedSpeakerUnavailable;
     private string _serverUrl = "";
     private string _roomName = "";
     // The last Alt+number readback (digit + when), so a quick second press of the
@@ -90,8 +94,12 @@ public sealed partial class MainWindow : Window
         ServerBox.Text = settings.ServerUrl;
         RoomBox.Text = settings.Room;
         NameBox.Text = settings.DisplayName;
-        HifiCheck.IsChecked = settings.HifiVoice;
-        MicGainSlider.Value = settings.MicGain;
+        var voiceProcessing = settings.VoiceProcessingEnabled;
+        HifiCheck.IsChecked = settings.HifiVoice && !voiceProcessing;
+        VoiceProcessingLobbyCheck.IsChecked = voiceProcessing;
+        VoiceProcessingCallCheck.IsChecked = voiceProcessing;
+        MicGainSlider.Value = ToPercent(settings.MicGain);
+        MediaVolumeSlider.Value = ToPercent(settings.MediaVolume);
         _micStereoByDevice = settings.MicStereoByDevice ?? new();
 
         // Land the keyboard where the next action is: the room name when a server is already
@@ -100,6 +108,8 @@ public sealed partial class MainWindow : Window
         {
             var target = string.IsNullOrWhiteSpace(ServerBox.Text) ? ServerBox : RoomBox;
             target.Focus(FocusState.Programmatic);
+            if (_rememberedMicUnavailable) Announce(I18n.T("remembered_mic_unavailable"));
+            if (_rememberedSpeakerUnavailable) Announce(I18n.T("remembered_speaker_unavailable"));
         };
         PopulateMicList(settings.MicDevice);
         PopulateSpeakerList(settings.SpeakerDevice);
@@ -161,7 +171,9 @@ public sealed partial class MainWindow : Window
             SpeakerDevice = SpeakerSelect.SelectedIndex == 0 ? "System default" : (SpeakerSelect.SelectedItem as string ?? "System default"),
             Language = I18n.Lang,
             HifiVoice = HifiCheck.IsChecked == true,
-            MicGain = MicGainSlider.Value,
+            VoiceProcessingEnabled = VoiceProcessingLobbyCheck.IsChecked == true,
+            MicGain = ToGain(MicGainSlider.Value),
+            MediaVolume = ToGain(MediaVolumeSlider.Value),
             MicStereoByDevice = _micStereoByDevice,
         }.Save();
     }
@@ -178,11 +190,47 @@ public sealed partial class MainWindow : Window
         SaveSettings();
     }
 
-    private void OnHifiChanged(object sender, RoutedEventArgs e)
+    private async void OnHifiChanged(object sender, RoutedEventArgs e)
     {
+        if (_syncingVoiceMode) return;
+        var result = VoiceProcessingSelection.SetHifiVoice(
+            VoiceProcessingLobbyCheck.IsChecked == true, HifiCheck.IsChecked == true);
+        SyncVoiceProcessingChecks(result.VoiceProcessing);
+        if (result.OtherModeDisabled) Announce(I18n.T("voice_processing_disabled_for_hifi"));
         SaveSettings();
         // Like the web toggle: the live producer's codec can't be renegotiated mid-call.
         if (_inCall) Announce(I18n.T("hifi_next_call"));
+        if (_session is not null && result.OtherModeDisabled)
+            await _session.SwitchVoiceProcessingAsync(false);
+    }
+
+    private async void OnVoiceProcessingChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncingVoiceMode) return;
+        var enabled = sender is CheckBox check && check.IsChecked == true;
+        var result = VoiceProcessingSelection.SetVoiceProcessing(HifiCheck.IsChecked == true, enabled);
+        _syncingVoiceMode = true;
+        HifiCheck.IsChecked = result.HifiVoice;
+        _syncingVoiceMode = false;
+        SyncVoiceProcessingChecks(result.VoiceProcessing);
+        if (result.OtherModeDisabled) Announce(I18n.T("hifi_disabled_for_voice_processing"));
+        SaveSettings();
+
+        if (_testCap is not null)
+        {
+            StopMicTest();
+            StartMicTest(announceStart: false);
+        }
+        if (_session is not null)
+            await _session.SwitchVoiceProcessingAsync(enabled);
+    }
+
+    private void SyncVoiceProcessingChecks(bool enabled)
+    {
+        _syncingVoiceMode = true;
+        VoiceProcessingLobbyCheck.IsChecked = enabled;
+        VoiceProcessingCallCheck.IsChecked = enabled;
+        _syncingVoiceMode = false;
     }
 
     /// <summary>(Re)apply every localized string. Called at startup and on language switch, so
@@ -208,6 +256,13 @@ public sealed partial class MainWindow : Window
         ListenOnlyCheck.Content = I18n.T("listen_only");
         PublicCheck.Content = I18n.T("make_public");
         HifiCheck.Content = I18n.T("hifi_voice");
+        AutomationProperties.SetHelpText(HifiCheck, I18n.T("hifi_voice_help"));
+        VoiceProcessingLobbyCheck.Content = I18n.T("voice_processing");
+        VoiceProcessingCallCheck.Content = I18n.T("voice_processing");
+        AutomationProperties.SetName(VoiceProcessingLobbyCheck, I18n.T("voice_processing"));
+        AutomationProperties.SetName(VoiceProcessingCallCheck, I18n.T("voice_processing"));
+        AutomationProperties.SetHelpText(VoiceProcessingLobbyCheck, I18n.T("voice_processing_help"));
+        AutomationProperties.SetHelpText(VoiceProcessingCallCheck, I18n.T("voice_processing_help"));
         ConnectButton.Content = I18n.T("join_call");
         AutomationProperties.SetName(ConnectStatus, I18n.T("connection_status"));
         PublicRoomsHeader.Text = I18n.T("public_rooms");
@@ -253,6 +308,8 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(LeaveButton, I18n.T("leave_call"));
         MicGainLabel.Text = I18n.T("mic_gain");
         AutomationProperties.SetName(MicGainSlider, I18n.T("mic_gain_name"));
+        MediaVolumeLabel.Text = I18n.T("media_volume");
+        AutomationProperties.SetName(MediaVolumeSlider, I18n.T("media_volume_name"));
         MasterLabel.Text = I18n.T("master");
         AutomationProperties.SetName(MasterVolume, I18n.T("master_volume_name"));
     }
@@ -325,7 +382,7 @@ public sealed partial class MainWindow : Window
     // Combo index → (WaveIn/WaveOut device number, product name); slot 0 is the Windows default.
     private List<(int Index, string Name)> _micDevices = new();
     private List<(int Index, string Name)> _speakerDevices = new();
-    private MicCapture? _testCap;
+    private IMicrophoneCapture? _testCap;
     private WaveOutEvent? _testOut;
     private BufferedWaveProvider? _testBuf;
     private int _testFrameCount;
@@ -338,6 +395,7 @@ public sealed partial class MainWindow : Window
         MicSelect.Items.Add(I18n.T("system_default"));
         foreach (var (_, name) in _micDevices.Skip(1)) MicSelect.Items.Add(name);
         var idx = preferName is null or "System default" ? 0 : _micDevices.FindIndex(d => d.Name == preferName);
+        _rememberedMicUnavailable = preferName is not null and not "System default" && idx < 0;
         MicSelect.SelectedIndex = idx >= 0 ? idx : 0;
     }
 
@@ -349,6 +407,7 @@ public sealed partial class MainWindow : Window
         SpeakerSelect.Items.Add(I18n.T("system_default"));
         foreach (var (_, name) in _speakerDevices.Skip(1)) SpeakerSelect.Items.Add(name);
         var idx = preferName is null or "System default" ? 0 : _speakerDevices.FindIndex(d => d.Name == preferName);
+        _rememberedSpeakerUnavailable = preferName is not null and not "System default" && idx < 0;
         SpeakerSelect.SelectedIndex = idx >= 0 ? idx : 0;
     }
 
@@ -389,6 +448,11 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        StartMicTest(announceStart: true);
+    }
+
+    private void StartMicTest(bool announceStart)
+    {
         var (dev, name) = SelectedMic();
         try
         {
@@ -397,12 +461,38 @@ public sealed partial class MainWindow : Window
             _testOut = new WaveOutEvent { DesiredLatency = 120, DeviceNumber = SelectedSpeaker().Index };
             _testOut.Init(_testBuf);
             _testOut.Play();
-            _testCap = new MicCapture(dev);
-            _testCap.FrameReady += OnTestFrame;
-            _testCap.Start();
+            if (VoiceProcessingLobbyCheck.IsChecked == true)
+            {
+                try
+                {
+                    var capture = VoiceDeviceMapper.MapCapture(dev);
+                    var render = VoiceDeviceMapper.MapRender(SelectedSpeaker().Index);
+                    if (capture.FellBack) Announce(I18n.T("remembered_mic_unavailable"));
+                    if (render.FellBack) Announce(I18n.T("remembered_speaker_unavailable"));
+                    _testCap = new ProcessedMicCapture(capture.EndpointIndex, render.EndpointIndex);
+                    _testCap.FrameReady += OnTestFrame;
+                    _testCap.Start();
+                }
+                catch (Exception ex)
+                {
+                    var hr = System.Runtime.InteropServices.Marshal.GetHRForException(ex);
+                    Diag.Log($"Mic test voice processing unavailable (HRESULT 0x{hr:X8})", ex);
+                    _testCap?.Dispose();
+                    _testCap = null;
+                    SyncVoiceProcessingChecks(false);
+                    SaveSettings();
+                    Announce(I18n.T("voice_processing_unavailable"));
+                }
+            }
+            if (_testCap is null)
+            {
+                _testCap = new MicCapture(dev);
+                _testCap.FrameReady += OnTestFrame;
+                _testCap.Start();
+            }
             MicTestButton.Content = I18n.T("mic_test_stop");
             MicTestButton.IsChecked = true;
-            Announce(I18n.F("testing_mic", name));
+            if (announceStart) Announce(I18n.F("testing_mic", name));
         }
         catch (Exception ex)
         {
@@ -634,6 +724,14 @@ public sealed partial class MainWindow : Window
         var session = new RoomSession();
         _session = session;
         session.Log += s => { Diag.Log($"[session] {s}"); Enqueue(() => CallStatus.Text = s); };
+        session.VoiceProcessingUnavailable += _ => Enqueue(() =>
+        {
+            SyncVoiceProcessingChecks(false);
+            SaveSettings();
+            Announce(I18n.T("voice_processing_unavailable"));
+        });
+        session.VoiceDeviceFallback += device => Enqueue(() => Announce(I18n.T(
+            device == "microphone" ? "remembered_mic_unavailable" : "remembered_speaker_unavailable")));
         session.PeerJoined += p => Enqueue(() =>
         {
             if (Find(p.PeerId) is null) _peers.Add(TrackRowLabel(new PeerItem(p.PeerId, p.DisplayName)));
@@ -778,6 +876,14 @@ public sealed partial class MainWindow : Window
             if (_inCall && !string.IsNullOrEmpty(title))
                 AnnounceEvent(I18n.F("now_streaming", name, title!));
         });
+        session.FilePlaybackEnded += error => Enqueue(() =>
+        {
+            FileButton.Content = I18n.T("play_file");
+            ChangeFileButton.Visibility = Visibility.Collapsed;
+            if (!_inCall) return;
+            if (string.IsNullOrEmpty(error)) AnnounceEvent(I18n.T("media_finished"));
+            else Announce(I18n.F("file_failed", error));
+        });
         session.JoinPending += () => Enqueue(() => Announce(I18n.T("waiting_admit")));
         session.RoomBecamePublic += () => Enqueue(() =>
         {
@@ -818,7 +924,9 @@ public sealed partial class MainWindow : Window
         SaveSettings();
 
         session.HifiVoice = HifiCheck.IsChecked == true;
-        session.MicGain = (float)MicGainSlider.Value;
+        session.VoiceProcessingEnabled = VoiceProcessingLobbyCheck.IsChecked == true;
+        session.MicGain = (float)ToGain(MicGainSlider.Value);
+        session.MediaVolume = (float)ToGain(MediaVolumeSlider.Value);
 
         var room = RoomBox.Text.Trim();
         try
@@ -836,6 +944,7 @@ public sealed partial class MainWindow : Window
             StreamButton.Content = session.IsStreaming ? I18n.T("stop_streaming") : I18n.T("stream");
             DuckButton.IsChecked = session.DuckingEnabled;
             MicGainSlider.IsEnabled = ListenOnlyCheck.IsChecked != true;
+            VoiceProcessingCallCheck.IsEnabled = ListenOnlyCheck.IsChecked != true;
             UpdateDownloadVisibility();
             ConnectScroll.Visibility = Visibility.Collapsed;
             CallPanel.Visibility = Visibility.Visible;
@@ -957,18 +1066,26 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnMasterVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
-        => _session?.SetMasterVolume((float)e.NewValue);
+        => _session?.SetMasterVolume((float)ToGain(e.NewValue));
 
     private void OnMicGainChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
-        if (_session is not null) _session.MicGain = (float)e.NewValue;
+        if (_session is not null) _session.MicGain = (float)ToGain(e.NewValue);
+    }
+
+    private void OnMediaVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (_session is not null) _session.MediaVolume = (float)ToGain(e.NewValue);
     }
 
     private void OnPeerVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is PeerItem item)
-            _session?.SetPeerVolume(item.PeerId, (float)e.NewValue);
+            _session?.SetPeerVolume(item.PeerId, (float)ToGain(e.NewValue));
     }
+
+    private static double ToPercent(double gain) => gain * PercentScale;
+    private static double ToGain(double percent) => percent / PercentScale;
 
     private void OnLocalMuteClick(object sender, RoutedEventArgs e)
     {
@@ -1391,7 +1508,7 @@ public sealed partial class MainWindow : Window
             AnnounceEvent(I18n.T("you_stopped_file"));
             return;
         }
-        await PickAndStreamFileAsync(swap: false);
+        await PickAndStreamMediaAsync(swap: false);
     }
 
     /// <summary>Swap the streamed file on the LIVE producer — listeners keep one continuous
@@ -1399,25 +1516,65 @@ public sealed partial class MainWindow : Window
     private async void OnChangeFileClick(object sender, RoutedEventArgs e)
     {
         if (_session is null || !_session.IsStreamingFile) return;
-        await PickAndStreamFileAsync(swap: true);
+        await PickAndStreamMediaAsync(swap: true);
     }
 
-    private async System.Threading.Tasks.Task PickAndStreamFileAsync(bool swap)
+    private async System.Threading.Tasks.Task PickAndStreamMediaAsync(bool swap)
     {
-        var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-        foreach (var ext in new[] { ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma" })
-            picker.FileTypeFilter.Add(ext);
+        var urlBox = Named(new TextBox
+        {
+            Header = I18n.T("media_url"),
+            PlaceholderText = "https://example.com/media.mp4",
+        }, I18n.T("media_url"));
+        var panel = new StackPanel { Spacing = 8, MinWidth = 420 };
+        panel.Children.Add(new TextBlock { Text = I18n.T("media_url_hint"), TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(urlBox);
+        var dialog = new ContentDialog
+        {
+            Title = I18n.T("media_dialog_title"),
+            Content = panel,
+            PrimaryButtonText = I18n.T("choose_file"),
+            SecondaryButtonText = I18n.T("play_file"),
+            CloseButtonText = I18n.T("cancel"),
+            DefaultButton = ContentDialogButton.Secondary,
+            XamlRoot = ((FrameworkElement)Content).XamlRoot,
+        };
 
-        var file = await picker.PickSingleFileAsync();
-        if (file is null || _session is null) return;
+        var result = await dialog.ShowAsync();
+        if (result == ContentDialogResult.None || _session is null) return;
+
+        string source;
+        string title;
+        if (result == ContentDialogResult.Primary)
+        {
+            var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.FileTypeFilter.Add("*");
+            var file = await picker.PickSingleFileAsync();
+            if (file is null || _session is null) return;
+            source = file.Path;
+            title = file.Name;
+        }
+        else
+        {
+            var value = urlBox.Text.Trim();
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                Announce(I18n.T("invalid_media_url"));
+                return;
+            }
+            source = uri.AbsoluteUri;
+            title = Uri.UnescapeDataString(Path.GetFileName(uri.AbsolutePath));
+            if (string.IsNullOrWhiteSpace(title)) title = uri.Host;
+        }
 
         try
         {
-            await _session.StartFileAsync(file.Path, file.Name);
+            title = await _session.StartFileAsync(source, title);
             FileButton.Content = I18n.T("stop_file");
             ChangeFileButton.Visibility = Visibility.Visible;
-            AnnounceEvent(swap ? I18n.F("you_swapped_file", file.Name) : I18n.F("playing_file", file.Name));
+            AnnounceEvent(swap ? I18n.F("you_swapped_file", title) : I18n.F("playing_file", title));
         }
         catch (Exception ex) { Announce(I18n.F("file_failed", ex.Message)); }
     }

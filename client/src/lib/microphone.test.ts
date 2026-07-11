@@ -15,7 +15,10 @@ describe("microphoneConstraints", () => {
 
   it("ties echo/noise/AGC to voiceProcessingEnabled", () => {
     const on = microphoneConstraints("", true, false);
-    expect(on.echoCancellation).toBe(true);
+    // Echo cancellation asks for the strongest mode ("all" — cancels screen
+    // readers and other system audio, Chrome 141+) as an `ideal`, which older
+    // browsers coerce to boolean true (their standard AEC) and never fail on.
+    expect(on.echoCancellation).toEqual({ ideal: "all" });
     expect(on.noiseSuppression).toBe(true);
     expect(on.autoGainControl).toBe(true);
 

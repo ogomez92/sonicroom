@@ -135,7 +135,7 @@
   "settings_speaker_fallback": "Speakers {n}",
   "settings_labels_hint": "Device names appear once microphone access is granted.",
   "settings_voice_processing_label": "Voice processing",
-  "settings_voice_processing_hint": "Echo control, noise cleanup and auto level",
+  "settings_voice_processing_hint": "Echo control, noise cleanup and auto level. Where the browser supports it, echo cancellation also removes screen reader and other system audio",
   "settings_hifi_voice_label": "Hi-fi voice (stereo)",
   "settings_hifi_voice_hint": "Send stereo at a higher bitrate. Uses more data; applies on your next call",
   "settings_extra_mics_label": "Extra microphones to stream",
