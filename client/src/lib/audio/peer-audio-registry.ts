@@ -134,7 +134,12 @@ export class PeerAudioRegistry {
     // iOS Safari requires webkit attributes
     (audioEl as unknown as Record<string, boolean>).playsInline = true;
     (audioEl as unknown as Record<string, string>).webkitPlaysinline = "true";
-    // Mute the HTML element — audio is routed through the shared AudioContext
+    // Mute the HTML element — audio is routed through the shared AudioContext.
+    // BOTH properties: iOS Safari ignores volume writes (hardware-buttons only,
+    // reads always return 1), so without muted the element ALSO plays at full
+    // volume there — every stream audible twice (element + graph), slightly
+    // offset, and volume/deafen/ducking only applied to the graph copy.
+    audioEl.muted = true;
     audioEl.volume = 0;
 
     resumeContext(this.ctx);
