@@ -51,6 +51,8 @@
   "room_chat_close_unread": "Close chat, {count} unread",
   "room_no_message": "No message {n}",
   "room_kicked": "You were removed from the room.",
+  "room_kicked_title": "You were removed",
+  "room_kicked_body": "The group has voted to remove you from this room. You can create or join another room from the lobby.",
 
   "controls_toolbar_label": "Audio controls",
   "controls_mute": "Mute microphone",

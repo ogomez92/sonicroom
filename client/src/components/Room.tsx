@@ -396,29 +396,13 @@ export function Room() {
     );
   }
 
-  // Voted out of the room: a dedicated screen (this happens after we'd already
-  // joined, so it's separate from the join error state above). The SR text was
-  // already announced via announceEvent when the kick arrived.
-  if (kicked) {
-    return (
-      <div className="flex min-h-dvh flex-col bg-sonic-900">
-        <div className="flex flex-1 items-center justify-center">
-          <div className="flex max-w-sm flex-col items-center gap-4 px-4 text-center">
-            <p className="text-lg text-muted" role="alert">
-              {m.room_kicked()}
-            </p>
-            <button
-              onClick={() => navigate("/")}
-              className="rounded-lg bg-sonic-accent px-4 py-2 text-sm text-white hover:bg-sonic-accent/90"
-            >
-              {m.room_back_to_lobby()}
-            </button>
-          </div>
-        </div>
-        <Footer />
-      </div>
-    );
-  }
+  // Voted out of the room: a modal dialog overlays the room (this happens after
+  // we'd already joined, so it's separate from the join error state above).
+  // The SR text was already announced via announceEvent when the kick arrived.
+  const kickedDialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (kicked) kickedDialogRef.current?.showModal();
+  }, [kicked]);
 
   const peerList = Array.from(peers.values());
   // Vote-to-kick needs a real group — it's disabled (controls hidden, like a
@@ -613,6 +597,27 @@ export function Room() {
           onVolumeChange={setStreamMonitorVolume}
         />
       )}
+
+      {/* Kicked modal — overlays the room; focus is trapped inside. */}
+      <dialog
+        ref={kickedDialogRef}
+        className="m-auto rounded-2xl border border-sonic-700 bg-sonic-900 p-8 text-center shadow-2xl backdrop:bg-black/60"
+        role="dialog"
+        aria-modal="true"
+      >
+        <div className="flex max-w-sm flex-col items-center gap-4">
+          <p className="text-lg font-semibold text-sonic-100" role="alert">
+            {m.room_kicked_title()}
+          </p>
+          <p className="text-sm text-muted">{m.room_kicked_body()}</p>
+          <button
+            onClick={() => navigate("/")}
+            className="mt-2 rounded-lg bg-sonic-accent px-4 py-2 text-sm font-medium text-white hover:bg-sonic-accent/90"
+          >
+            {m.room_back_to_lobby()}
+          </button>
+        </div>
+      </dialog>
     </div>
   );
 }

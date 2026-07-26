@@ -51,6 +51,8 @@
   "room_chat_close_unread": "Fermer le chat, {count} non lus",
   "room_no_message": "Aucun message {n}",
   "room_kicked": "Vous avez été exclu du salon.",
+  "room_kicked_title": "Vous avez été exclu",
+  "room_kicked_body": "Le groupe a voté pour vous exclure de ce salon. Vous pouvez créer ou rejoindre un autre salon depuis l'accueil.",
 
   "controls_toolbar_label": "Commandes audio",
   "controls_mute": "Couper le micro",
