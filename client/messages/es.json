@@ -51,6 +51,8 @@
   "room_chat_close_unread": "Cerrar chat, {count} sin leer",
   "room_no_message": "No hay mensaje {n}",
   "room_kicked": "Has sido expulsado de la sala.",
+  "room_kicked_title": "Has sido expulsado",
+  "room_kicked_body": "El grupo ha votado para expulsarte de esta sala. Puedes crear o unirte a otra sala desde el inicio.",
 
   "controls_toolbar_label": "Controles de audio",
   "controls_mute": "Silenciar micrófono",
