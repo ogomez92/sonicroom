@@ -7,7 +7,8 @@ import path from "node:path";
 import { createWorker } from "mediasoup";
 import type { Worker } from "mediasoup/types";
 import { workerSettings, numWorkers } from "./mediasoup-config.js";
-import { setWorkers, getPublicRooms } from "./room-manager.js";
+import { setWorkers, getPublicRooms, getRoomInfo } from "./room-manager.js";
+import { roomNameSchema } from "./signaling/schemas.js";
 import { createSignalingServer } from "./signaling.js";
 import { RecordingManager, type SpawnedProcess } from "./recording.js";
 import { StreamManager } from "./streaming.js";
@@ -77,6 +78,28 @@ async function main() {
   // (the visitor isn't connected to a socket yet), so it's a plain GET.
   app.get("/api/public-rooms", (_req, res) => {
     res.json({ rooms: getPublicRooms() });
+  });
+
+  // Look up ONE room by name, public or private: 200 + occupancy if it's live,
+  // 404 if it isn't. A room only exists while it holds at least one peer, so a
+  // 404 means "nobody is in a room by that name" — it is NOT proof the name is
+  // unused, and a 200 is not an invitation (joining still goes through the
+  // knock gate / IP bans in signaling). Unauthenticated like the rest of /api,
+  // and it answers for private rooms too, so it does leak "is anyone in <name>
+  // right now" to anyone who can guess the name; only the count is exposed,
+  // never the participants. Gate it if that matters for your deployment.
+  app.get("/api/rooms/:name", (req, res) => {
+    const parsed = roomNameSchema.safeParse(req.params.name);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid room name" });
+      return;
+    }
+    const info = getRoomInfo(parsed.data);
+    if (!info) {
+      res.status(404).json({ exists: false, name: parsed.data, error: "Room not found" });
+      return;
+    }
+    res.json({ exists: true, ...info });
   });
 
   // Audio sources for the in-call music/file streamer. The library is a

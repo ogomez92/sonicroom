@@ -210,6 +210,32 @@ export function getRooms() {
   return rooms;
 }
 
+// Occupancy of ONE room by name, or null if no such room is live. Rooms only
+// exist while they hold at least one peer (removePeer destroys an empty one),
+// so "the room exists" is the same statement as "someone is in it" — there is
+// no such thing as a live-but-empty room to report a count of 0 for.
+// `participants` counts every peer, `casters` the send-only music sources among
+// them, so `participants - casters` is the number of humans. Names are
+// deliberately NOT included: for a public room they're already in
+// getPublicRooms, and for a private one the count is all this should reveal.
+export function getRoomInfo(roomName: string): {
+  name: string;
+  participants: number;
+  casters: number;
+  isPublic: boolean;
+  mode: RoomMode;
+} | null {
+  const room = rooms.get(roomName);
+  if (!room) return null;
+  return {
+    name: room.name,
+    participants: room.peers.size,
+    casters: room.casters.size,
+    isPublic: room.isPublic,
+    mode: room.mode,
+  };
+}
+
 // Snapshot of the currently-live PUBLIC rooms for the lobby list: each room's
 // name plus the display names of everyone currently in it. Private rooms are
 // omitted entirely. Rooms only exist while they hold at least one peer, so
