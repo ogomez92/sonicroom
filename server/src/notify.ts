@@ -31,7 +31,7 @@ function config(): NotyConfig {
   if (cached) return cached;
   cached = {
     enabled: /^(1|true|yes|on)$/i.test(process.env.NOTY_ENABLED ?? ""),
-    host: process.env.NOTY_HOST || "win.oriolgomez.com",
+    host: process.env.NOTY_HOST || "win.gomsen.com",
     port: parseInt(process.env.NOTY_PORT || "1337", 10),
     sender: process.env.NOTY_SENDER || "sonicroom",
   };

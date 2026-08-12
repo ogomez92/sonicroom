@@ -1,4 +1,4 @@
-# mediasoup ground truth (captured from sonic.oriolgomez.com, 2026-07-04)
+# mediasoup ground truth (captured from sonic.gomsen.com, 2026-07-04)
 
 Real values the native transport must interoperate with. Captured via
 `tools/SignalingHarness ... probe`. Use these to build/verify the Phase 2 handshake.

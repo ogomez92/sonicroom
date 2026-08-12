@@ -108,11 +108,11 @@ describe("iceServers", () => {
 
   it("ships the expected default STUN/TURN entries", () => {
     const urls = DEFAULT_ICE_SERVERS.map((s) => s.urls);
-    expect(urls).toContain("stun:turn.oriolgomez.com:3478");
+    expect(urls).toContain("stun:turn.gomsen.com:3478");
     expect(urls).toContain("stun:stun.l.google.com:19302");
-    expect(urls).toContain("turn:turn.oriolgomez.com:3478?transport=udp");
-    expect(urls).toContain("turn:turn.oriolgomez.com:3478?transport=tcp");
-    expect(urls).toContain("turns:turn.oriolgomez.com:5349?transport=tcp");
+    expect(urls).toContain("turn:turn.gomsen.com:3478?transport=udp");
+    expect(urls).toContain("turn:turn.gomsen.com:3478?transport=tcp");
+    expect(urls).toContain("turns:turn.gomsen.com:5349?transport=tcp");
     // The TURN (not STUN) entries carry credentials.
     for (const s of DEFAULT_ICE_SERVERS) {
       if (String(s.urls).startsWith("turn")) {

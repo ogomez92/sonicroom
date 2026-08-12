@@ -16,7 +16,7 @@
             <ComboBox x:Name="LanguageSelect" Header="Language" AutomationProperties.Name="Language"
                       HorizontalAlignment="Stretch" SelectionChanged="OnLanguageChanged" />
             <TextBox x:Name="ServerBox" Header="Server URL" AutomationProperties.Name="Server URL"
-                     Text="https://sonic.oriolgomez.com" />
+                     Text="https://sonic.gomsen.com" />
             <TextBox x:Name="RoomBox" Header="Room" AutomationProperties.Name="Room" Text="test" />
             <TextBox x:Name="NameBox" Header="Display name" AutomationProperties.Name="Display name" Text="WinNative" />
             <ComboBox x:Name="MicSelect" Header="Microphone" AutomationProperties.Name="Microphone"

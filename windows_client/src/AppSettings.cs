@@ -8,7 +8,7 @@ namespace SonicRoom.Windows;
 /// <summary>User settings persisted to <c>%LOCALAPPDATA%\SonicRoom\settings.json</c>.</summary>
 public sealed class AppSettings
 {
-    public string ServerUrl { get; set; } = "https://sonic.oriolgomez.com";
+    public string ServerUrl { get; set; } = "https://sonic.gomsen.com";
     public string Room { get; set; } = "test";
     public string DisplayName { get; set; } = "WinNative";
     /// <summary>Microphone by product name (WaveIn indices shift across replugs).</summary>

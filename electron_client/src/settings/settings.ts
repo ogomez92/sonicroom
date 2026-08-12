@@ -33,20 +33,20 @@ declare global {
 // Mirrors client/src/lib/runtime-config.ts so "Reset to defaults" matches what the
 // client would use when no override is set.
 const DEFAULT_ICE_SERVERS: IceServer[] = [
-  { urls: "stun:turn.oriolgomez.com:3478" },
+  { urls: "stun:turn.gomsen.com:3478" },
   { urls: "stun:stun.l.google.com:19302" },
   {
-    urls: "turn:turn.oriolgomez.com:3478?transport=udp",
+    urls: "turn:turn.gomsen.com:3478?transport=udp",
     username: "gamesturn",
     credential: "sin6V0gFokHz78gM0GDfXmat",
   },
   {
-    urls: "turn:turn.oriolgomez.com:3478?transport=tcp",
+    urls: "turn:turn.gomsen.com:3478?transport=tcp",
     username: "gamesturn",
     credential: "sin6V0gFokHz78gM0GDfXmat",
   },
   {
-    urls: "turns:turn.oriolgomez.com:5349?transport=tcp",
+    urls: "turns:turn.gomsen.com:5349?transport=tcp",
     username: "gamesturn",
     credential: "sin6V0gFokHz78gM0GDfXmat",
   },
