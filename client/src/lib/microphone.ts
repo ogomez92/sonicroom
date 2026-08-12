@@ -1,10 +1,34 @@
+// `?ios=on` (also 1/true/yes/on/enable/enabled/force/ios) forces the iOS audio
+// path on ANY browser: no sample-rate pin on capture or on the shared
+// AudioContext, and voice processing on by default. Detection below is UA-based,
+// so it misses WebKit-shaped browsers it doesn't recognise — and any browser
+// whose device fights a pinned 48 kHz hits the same garbled/interrupted capture.
+// This is the manual override for those: put it on the room link.
+// Read once here, at module load, because `isIOS` is a const that the shared
+// AudioContext (`lib/audio/shared-context.ts`) and the store's voice-processing
+// default consume the moment they import this file — a later read would be too
+// late to change either.
+export const iosForcedByUrl = ((): boolean => {
+  if (typeof window === "undefined") return false;
+  try {
+    const value = new URLSearchParams(window.location.search).get("ios");
+    if (value == null) return false;
+    return ["on", "1", "true", "yes", "enable", "enabled", "force", "ios"].includes(
+      value.toLowerCase(),
+    );
+  } catch {
+    return false;
+  }
+})();
+
 // iOS/iPadOS Safari (iPadOS now reports as "MacIntel" + touch). WebKit's audio
 // stack should use the device-native sample rate because hardware route changes
-// can otherwise interrupt or garble capture.
+// can otherwise interrupt or garble capture. `?ios=on` forces the same path.
 export const isIOS =
-  typeof navigator !== "undefined" &&
-  (/iP(hone|ad|od)/.test(navigator.userAgent) ||
-    (/Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1));
+  iosForcedByUrl ||
+  (typeof navigator !== "undefined" &&
+    (/iP(hone|ad|od)/.test(navigator.userAgent) ||
+      (/Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)));
 
 // Mic capture constraints. Two independent per-user choices:
 //   - voiceProcessingEnabled: echo cancel / noise suppress / auto gain.

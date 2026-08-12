@@ -115,7 +115,7 @@ A room is **private by default** and **sticky-public** once any joiner sets it (
 
 ### Client routing
 
-Two routes (`client/src/main.tsx`): `/` → `Lobby`, `/room/:roomName` → `Room`. Room URL params: `?p2p=off` (also false/0/no/disable/disabled) pins SFU; `?public=true` (also 1/yes/on/enable/enabled/public) lists the room publicly; `?displayName=…` deep-links past the lobby name prompt; `?lang=` overrides the UI language (see i18n below). State lives in a single zustand store (`client/src/stores/room.ts`); mic gain persists to localStorage. The room name is reflected into `document.title` from the `Room` component.
+Two routes (`client/src/main.tsx`): `/` → `Lobby`, `/room/:roomName` → `Room`. Room URL params: `?p2p=off` (also false/0/no/disable/disabled) pins SFU; `?public=true` (also 1/yes/on/enable/enabled/public) lists the room publicly; `?displayName=…` deep-links past the lobby name prompt; `?lang=` overrides the UI language (see i18n below); `?ios=on` (also 1/true/yes/on/enable/enabled/force/ios) forces the **iOS audio path** on any browser — `isIOS` in `client/src/lib/microphone.ts` is `iosForcedByUrl || <UA detection>`, so the mic constraints and the shared `AudioContext` drop the 48 kHz sample-rate pin and voice processing defaults on. Read **at module load** (the `AudioContext` is constructed on import), so it only takes effect on a page load carrying the param — the lobby forwards it into the room URL it navigates to. State lives in a single zustand store (`client/src/stores/room.ts`); mic gain persists to localStorage. The room name is reflected into `document.title` from the `Room` component.
 
 ### Localization / i18n (Paraglide JS)
 

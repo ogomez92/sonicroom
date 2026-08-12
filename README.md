@@ -293,13 +293,14 @@ The core rule: **announcements go to chat.** Every room-event announcement (reco
 
 Two routes: `/` → Lobby, `/room/:roomName` → Room. Supported room URL params:
 
-| Param           | Effect                                                                                  |
-| --------------- | --------------------------------------------------------------------------------------- |
-| `?p2p=off`      | Pin the SFU even for small rooms (also `false`/`0`/`no`/`disable…`).                    |
-| `?public=true`  | List the room publicly (also `1`/`yes`/`on`/`enable…`).                                 |
-| `?mic=off`      | Join without a microphone — listen + text chat only (also `false`/`0`/`no`/`disable…`). |
-| `?displayName=` | Deep-link past the lobby name prompt.                                                   |
-| `?lang=`        | Override the UI language for this session.                                              |
+| Param           | Effect                                                                                                                                                            |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `?p2p=off`      | Pin the SFU even for small rooms (also `false`/`0`/`no`/`disable…`).                                                                                              |
+| `?public=true`  | List the room publicly (also `1`/`yes`/`on`/`enable…`).                                                                                                           |
+| `?mic=off`      | Join without a microphone — listen + text chat only (also `false`/`0`/`no`/`disable…`).                                                                           |
+| `?displayName=` | Deep-link past the lobby name prompt.                                                                                                                             |
+| `?lang=`        | Override the UI language for this session.                                                                                                                        |
+| `?ios=on`       | Force the iOS audio path on any browser — no 48 kHz pin on the mic or the shared `AudioContext`, voice processing on by default (also `1`/`true`/`yes`/`force…`). |
 
 State lives in a single Zustand store (`client/src/stores/room.ts`); mic gain persists to `localStorage`.
 

@@ -130,3 +130,58 @@ describe("isIOS (computed at module load from navigator)", () => {
     expect(c.channelCount).toBe(2);
   });
 });
+
+describe("?ios= URL override (read at module load)", () => {
+  const DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120";
+
+  // Re-import with both a non-iOS navigator and a stubbed location, so the
+  // override is the only thing that can make isIOS true.
+  async function importWithSearch(search: string) {
+    vi.resetModules();
+    vi.stubGlobal("navigator", { userAgent: DESKTOP_UA, maxTouchPoints: 0 });
+    vi.stubGlobal("window", { location: { search } });
+    return import("./microphone");
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("forces the iOS path on a desktop browser with ?ios=on", async () => {
+    const { isIOS, iosForcedByUrl } = await importWithSearch("?ios=on");
+    expect(iosForcedByUrl).toBe(true);
+    expect(isIOS).toBe(true);
+  });
+
+  it("drops the 48 kHz hint when forced", async () => {
+    const { microphoneConstraints: mc } = await importWithSearch("?ios=on");
+    expect("sampleRate" in mc("dev", false, false)).toBe(false);
+  });
+
+  it("accepts the other truthy spellings, alongside other params", async () => {
+    for (const value of ["1", "true", "YES", "Enable", "enabled", "force", "ios"]) {
+      const { isIOS } = await importWithSearch(`?p2p=off&ios=${value}`);
+      expect(isIOS, value).toBe(true);
+    }
+  });
+
+  it("stays off with no param, an unrelated value, or an explicit off", async () => {
+    for (const search of ["", "?p2p=off", "?ios=", "?ios=off", "?ios=false", "?ios=nope"]) {
+      const { isIOS, iosForcedByUrl } = await importWithSearch(search);
+      expect(iosForcedByUrl, search).toBe(false);
+      expect(isIOS, search).toBe(false);
+    }
+  });
+
+  it("still detects a real iOS device when the param is absent", async () => {
+    vi.resetModules();
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+      maxTouchPoints: 5,
+    });
+    vi.stubGlobal("window", { location: { search: "" } });
+    const { isIOS } = await import("./microphone");
+    expect(isIOS).toBe(true);
+  });
+});

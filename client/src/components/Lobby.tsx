@@ -7,6 +7,7 @@ import { Footer } from "./Footer";
 import { getLocale } from "../lib/i18n";
 import { getInstanceName, getDefaultDisplayName } from "../lib/branding";
 import { apiUrl } from "../lib/runtime-config";
+import { iosForcedByUrl } from "../lib/microphone";
 import { m } from "../paraglide/messages.js";
 
 function sanitize(input: string): string {
@@ -200,6 +201,10 @@ export function Lobby() {
       if (makePublic) params.set("public", "true");
       // Listen + text-chat only — no mic prompt (see Room's ?mic=off handling).
       if (joinWithoutMic) params.set("mic", "off");
+      // Carry a forced iOS audio path through to the room URL so it survives a
+      // reload there. It has no toggle — it's a manual override read at module
+      // load in lib/microphone.ts, not lobby state.
+      if (iosForcedByUrl) params.set("ios", "on");
       const qs = params.toString();
       navigate(`/room/${sanitizedRoom}${qs ? `?${qs}` : ""}`);
     },
