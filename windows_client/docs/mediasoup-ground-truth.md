@@ -28,29 +28,44 @@ Real values the native transport must interoperate with. Captured via
     "iceParameters": {
       "usernameFragment": "<ufrag>",
       "password": "<pwd>",
-      "iceLite": true                     // server is ICE-LITE → client is controlling
+      "iceLite": true, // server is ICE-LITE → client is controlling
     },
     "iceCandidates": [
-      { "foundation":"udpcandidate", "priority":1076302079, "ip":"217.154.98.41",
-        "address":"217.154.98.41", "protocol":"udp", "port":40042, "type":"host" },
-      { "foundation":"udpcandidate", "priority":1076276479, "ip":"2001:ba0:208:5400::1",
-        "address":"2001:ba0:208:5400::1", "protocol":"udp", "port":40034, "type":"host" }
+      {
+        "foundation": "udpcandidate",
+        "priority": 1076302079,
+        "ip": "217.154.98.41",
+        "address": "217.154.98.41",
+        "protocol": "udp",
+        "port": 40042,
+        "type": "host",
+      },
+      {
+        "foundation": "udpcandidate",
+        "priority": 1076276479,
+        "ip": "2001:ba0:208:5400::1",
+        "address": "2001:ba0:208:5400::1",
+        "protocol": "udp",
+        "port": 40034,
+        "type": "host",
+      },
     ],
     "dtlsParameters": {
       "fingerprints": [
-        { "algorithm":"sha-1",   "value":"96:30:AA:.." },
-        { "algorithm":"sha-224", "value":".." },
-        { "algorithm":"sha-256", "value":"C3:09:F1:.." },   // prefer sha-256
-        { "algorithm":"sha-384", "value":".." },
-        { "algorithm":"sha-512", "value":".." }
+        { "algorithm": "sha-1", "value": "96:30:AA:.." },
+        { "algorithm": "sha-224", "value": ".." },
+        { "algorithm": "sha-256", "value": "C3:09:F1:.." }, // prefer sha-256
+        { "algorithm": "sha-384", "value": ".." },
+        { "algorithm": "sha-512", "value": ".." },
       ],
-      "role": "auto"                       // client chooses; we act as DTLS client (active)
-    }
-  }
+      "role": "auto", // client chooses; we act as DTLS client (active)
+    },
+  },
 }
 ```
 
 Notes:
+
 - UDP-only host candidates; no TCP/TLS (coturn handles fallback, not needed here on a server).
 - The client never signals its own ICE candidates back — it connects to the server's candidates
   (ICE-lite). Only the client's **dtlsParameters** flow back via `connect-transport`.

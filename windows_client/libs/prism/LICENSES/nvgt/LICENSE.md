@@ -1,4 +1,5 @@
 # NVGT - NonVisual Gaming Toolkit
+
 Copyright (c) 2022-2025 Sam Tupy
 [nvgt.dev](https://nvgt.dev)
 

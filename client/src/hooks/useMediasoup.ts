@@ -1044,7 +1044,9 @@ export function useMediasoup() {
           store
             .getState()
             .announceEvent(
-              reason === "caster" ? announce_caster_removed({ name }) : announce_peer_kicked({ name }),
+              reason === "caster"
+                ? announce_caster_removed({ name })
+                : announce_peer_kicked({ name }),
             );
           playCue(sharedAudioContext, "leave");
         },
@@ -1309,8 +1311,7 @@ export function useMediasoup() {
           if (source === "share") registry.removeShareStream(producerId);
           else if (source === "file") registry.removeFileStream(producerId);
           else registry.removeMicStream(producerId);
-          const name =
-            store.getState().peers.get(ownerId)?.displayName ?? announce_a_participant();
+          const name = store.getState().peers.get(ownerId)?.displayName ?? announce_a_participant();
           store.getState().announceEvent(announce_peer_stream_stopped({ name }));
           playCue(sharedAudioContext, "share-stop");
         },
