@@ -324,6 +324,14 @@ interface RoomState {
   // "you were removed" screen; cleared on reset (leaving / next join).
   kicked: boolean;
 
+  // Shared notes (NoteLab). notesEnabled: whether this instance has the feature
+  // configured (server-side NOTELAB_URL) — gates the "Notes" button / Alt+N.
+  // notesUrl: the room's collaborative note URL once anyone has opened it, else
+  // null. Both seeded from the join response; notesUrl also arrives via a
+  // `notes-updated` broadcast when someone else creates the note.
+  notesEnabled: boolean;
+  notesUrl: string | null;
+
   // Peers
   peers: Map<string, PeerState>;
 
@@ -373,6 +381,8 @@ interface RoomState {
   setAwaitingApproval: (awaiting: boolean) => void;
   setRoomIsPublic: (isPublic: boolean) => void;
   setKicked: (kicked: boolean) => void;
+  setNotesEnabled: (enabled: boolean) => void;
+  setNotesUrl: (url: string | null) => void;
   addMessage: (message: ChatMessage) => void;
   addPeer: (peerId: string, displayName: string) => void;
   removePeer: (peerId: string) => void;
@@ -435,6 +445,8 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   awaitingApproval: false,
   roomIsPublic: false,
   kicked: false,
+  notesEnabled: false,
+  notesUrl: null,
   peers: new Map(),
   speakerBadges: {},
   messages: [],
@@ -520,6 +532,8 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   setAwaitingApproval: (awaitingApproval) => set({ awaitingApproval }),
   setRoomIsPublic: (roomIsPublic) => set({ roomIsPublic }),
   setKicked: (kicked) => set({ kicked }),
+  setNotesEnabled: (notesEnabled) => set({ notesEnabled }),
+  setNotesUrl: (notesUrl) => set({ notesUrl }),
 
   // Room-event announcement (recording/share/music/mute…): speak it AND log it
   // into the chat history as a "system" entry, so chat is the single timeline
@@ -732,6 +746,10 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       awaitingApproval: false,
       roomIsPublic: false,
       kicked: false,
+      // Notes are per-room: drop the URL on leave. notesEnabled is re-seeded
+      // from the next join response anyway, so resetting it is harmless.
+      notesEnabled: false,
+      notesUrl: null,
       peers: new Map(),
       speakerBadges: {},
       messages: [],

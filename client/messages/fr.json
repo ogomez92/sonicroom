@@ -86,6 +86,10 @@
   "controls_leave": "Quitter",
   "controls_speakers": "Qui parle",
   "controls_speakers_title": "Annonce qui parle maintenant ou a parlé récemment (W)",
+  "controls_notes": "Notes partagées",
+  "controls_notes_open": "Ouvrir les notes partagées",
+  "controls_notes_title": "Créer des notes partagées pour ce salon — s'ouvrent dans un nouvel onglet (Alt+N)",
+  "controls_notes_open_title": "Ouvrir les notes partagées de ce salon dans un nouvel onglet (Alt+N)",
 
   "chat_panel_label": "Chat",
   "chat_heading": "Chat",
@@ -270,5 +274,7 @@
   "announce_speakers_list": "Ont parlé récemment : {names}",
   "announce_music_started": "{name} a commencé à diffuser de la musique",
   "announce_music_stopped": "{name} a arrêté de diffuser de la musique",
+  "announce_notes_opened": "{name} a ouvert les notes partagées",
+  "announce_notes_failed": "Impossible d'ouvrir les notes partagées",
   "announce_chat_hint": "Appuyez sur Alt plus un chiffre de 1 à 0 pour entendre les dix derniers messages, même lorsque le panneau de discussion est fermé. Appuyez de nouveau sur le même chiffre pour copier ce message."
 }

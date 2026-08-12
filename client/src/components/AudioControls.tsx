@@ -14,6 +14,7 @@ import {
   Radio,
   Settings,
   Megaphone,
+  NotebookPen,
 } from "lucide-react";
 import { useRoomStore } from "../stores/room";
 import { apiUrl } from "../lib/runtime-config";
@@ -34,6 +35,8 @@ interface AudioControlsProps {
   onStopStreaming: () => Promise<void>;
   // Announce + briefly number the people talking now / who talked recently.
   onAnnounceSpeakers: () => void;
+  // Open (creating on first use) the room's shared note in a new tab.
+  onOpenNotes: () => void;
   onLeave: () => void;
 }
 
@@ -46,6 +49,7 @@ export function AudioControls({
   onStartStreaming,
   onStopStreaming,
   onAnnounceSpeakers,
+  onOpenNotes,
   onLeave,
 }: AudioControlsProps) {
   const isMuted = useRoomStore((s) => s.isMuted);
@@ -56,6 +60,10 @@ export function AudioControls({
   const isRecording = useRoomStore((s) => s.isRecording);
   const recordingId = useRoomStore((s) => s.recordingId);
   const isStreaming = useRoomStore((s) => s.isStreaming);
+  // Shared notes: whether the feature is configured on this instance (gates the
+  // button) and whether the room already has a note (label: open vs create).
+  const notesEnabled = useRoomStore((s) => s.notesEnabled);
+  const notesUrl = useRoomStore((s) => s.notesUrl);
 
   // The gear (device pickers) and the streaming button each open a popover.
   // Only one is open at a time — opening one closes the other.
@@ -108,6 +116,7 @@ export function AudioControls({
     ...(recordingId ? ["download", "download-tracks"] : []),
     "stream",
     "speakers",
+    ...(notesEnabled ? ["notes"] : []),
     "settings",
     "leave",
   ];
@@ -344,6 +353,25 @@ export function AudioControls({
         >
           <Megaphone className="h-5 w-5" />
         </button>
+
+        {/* Shared notes: open (creating on first use) this room's collaborative
+            NoteLab note in a new tab. Tinted when a note already exists. Hidden
+            entirely unless the instance has NOTELAB_URL configured. */}
+        {notesEnabled && (
+          <button
+            {...item("notes")}
+            onClick={onOpenNotes}
+            className={`flex h-11 w-11 items-center justify-center rounded-full transition-all ${
+              notesUrl
+                ? "bg-sonic-accent/20 text-sonic-accent hover:bg-sonic-accent/30"
+                : "bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
+            }`}
+            aria-label={notesUrl ? m.controls_notes_open() : m.controls_notes()}
+            title={notesUrl ? m.controls_notes_open_title() : m.controls_notes_title()}
+          >
+            <NotebookPen className="h-5 w-5" />
+          </button>
+        )}
 
         <button
           {...item("settings")}

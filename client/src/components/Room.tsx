@@ -95,6 +95,7 @@ export function Room() {
     kickCaster,
     stopPeerStream,
     announceSpeakers,
+    openNotes,
   } = useMediasoup();
 
   const [joinState, setJoinState] = useState<JoinState>("idle");
@@ -300,6 +301,15 @@ export function Room() {
           announce(msg ? formatMessage(msg, now) : m.room_no_message({ n }));
           return;
         }
+        // Alt+N: open (creating on first use) the room's shared notes in a new
+        // tab. Match the PHYSICAL key (e.code) so it fires regardless of layout,
+        // like the Alt+number readback above. Only when the feature is enabled —
+        // otherwise leave Alt+N for the browser/OS.
+        if (e.code === "KeyN" && useRoomStore.getState().notesEnabled) {
+          e.preventDefault();
+          openNotes();
+          return;
+        }
       }
 
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -338,7 +348,15 @@ export function Room() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [joinState, toggleMute, toggleAudioShare, toggleDucking, toggleRecording, announceSpeakers]);
+  }, [
+    joinState,
+    toggleMute,
+    toggleAudioShare,
+    toggleDucking,
+    toggleRecording,
+    announceSpeakers,
+    openNotes,
+  ]);
 
   const handleLeave = useCallback(() => {
     postToHost("readyToClose");
@@ -554,6 +572,7 @@ export function Room() {
           onStartStreaming={startStreaming}
           onStopStreaming={stopStreaming}
           onAnnounceSpeakers={announceSpeakers}
+          onOpenNotes={openNotes}
           onLeave={handleLeave}
         />
         <PoweredBy />

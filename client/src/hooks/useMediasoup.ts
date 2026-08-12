@@ -39,6 +39,7 @@ import {
   announce_your_stream_stopped,
   announce_you_were_kicked,
   announce_no_mic,
+  announce_notes_failed,
   file_stream_name,
   file_stream_name_titled,
   file_player_streaming,
@@ -59,6 +60,7 @@ import {
   registerStreamingHandlers,
   registerMuteHandlers,
   registerChatHandlers,
+  registerNotesHandlers,
 } from "../lib/socket/room-event-handlers";
 import { sharedAudioContext, resumeContext } from "../lib/audio/shared-context";
 
@@ -303,6 +305,46 @@ export function useMediasoup() {
 
   // Announce + briefly number the most recent talkers (W shortcut / toolbar button).
   const announceSpeakers = useCallback(() => detector.announceSpeakers(), [detector]);
+
+  // Open this room's shared NoteLab note in a NEW TAB (never an iframe). If we
+  // already know the URL (the room had a note on join, or a `notes-updated`
+  // arrived), open it straight away. Otherwise ask the server, which creates the
+  // note on first use and reuses it thereafter — so no two people ever make two.
+  // Because that ack is async, we open a placeholder tab synchronously inside the
+  // user gesture (click / Alt+N) so the popup blocker allows it, then point it at
+  // the note once the URL arrives.
+  const openNotes = useCallback(() => {
+    if (!store.getState().notesEnabled) return;
+    const existing = store.getState().notesUrl;
+    if (existing) {
+      window.open(existing, "_blank", "noopener,noreferrer");
+      return;
+    }
+    const tab = window.open("", "_blank");
+    void emit<{ url?: string }>("open-notes", {})
+      .then((res) => {
+        const url = res.url;
+        if (!url) {
+          tab?.close();
+          return;
+        }
+        store.getState().setNotesUrl(url);
+        if (tab && !tab.closed) {
+          // Sever the opener before navigating so the note page can't reach back
+          // into this window; the navigation itself stays in the placeholder tab.
+          tab.opener = null;
+          tab.location.href = url;
+        } else {
+          // Placeholder was blocked/closed — fall back to a direct open.
+          window.open(url, "_blank", "noopener,noreferrer");
+        }
+      })
+      .catch((err) => {
+        console.warn("[notes] failed to open shared notes:", err);
+        tab?.close();
+        store.getState().announce(announce_notes_failed());
+      });
+  }, [emit, store]);
 
   // The outgoing audio graph (mic gain + soft limiter + the share/file producers)
   // lives in OutgoingAudioGraph. `connectMicToGraph` is a thin stable delegator so
@@ -756,6 +798,9 @@ export function useMediasoup() {
           isPublic?: boolean;
           kickVotes?: Array<{ targetId: string; votes: number }>;
           messages: ChatMessage[];
+          // Shared-notes feature availability + this room's note URL (if any).
+          notesEnabled?: boolean;
+          notesUrl?: string | null;
         };
         const joinPayload = {
           roomName,
@@ -815,6 +860,10 @@ export function useMediasoup() {
         store.getState().setStreaming(!!joinRes.streaming);
         // Whether this room is public — gates the vote-to-kick controls.
         store.getState().setRoomIsPublic(!!joinRes.isPublic);
+        // Shared-notes availability + the room's note URL (may have been created
+        // while we were away, or by another peer since our last join).
+        store.getState().setNotesEnabled(!!joinRes.notesEnabled);
+        store.getState().setNotesUrl(joinRes.notesUrl ?? null);
 
         // Reconcile the peer list: drop anyone who left while we were
         // disconnected, add newcomers. addPeer resets per-peer state, so only
@@ -1065,6 +1114,8 @@ export function useMediasoup() {
       // server-side). Self-contained — see lib/socket/room-event-handlers.ts.
       registerRecordingHandlers(socket);
       registerStreamingHandlers(socket);
+      // Shared-notes URL sync (someone opened the room's note for the first time).
+      registerNotesHandlers(socket);
 
       // P2P signaling relay
       socket.on(
@@ -1976,6 +2027,7 @@ export function useMediasoup() {
     setStreamMonitorVolume,
     sendChatMessage,
     announceSpeakers,
+    openNotes,
     peerAudiosRef,
   };
 }

@@ -22,6 +22,7 @@ import {
   announce_peer_muted,
   announce_peer_unmuted,
   announce_chat_hint,
+  announce_notes_opened,
 } from "../../paraglide/messages.js";
 
 const store = useRoomStore;
@@ -76,6 +77,19 @@ export function registerStreamingHandlers(socket: Socket) {
     s.announceEvent(
       reason ? announce_streaming_failed_reason({ reason }) : announce_streaming_failed(),
     );
+  });
+}
+
+// --- Shared notes (room-wide): someone opened this room's collaborative note
+// for the first time. Sync the URL so our button flips to "open" and a later
+// Alt+N opens it straight away, and log it to chat (rule: room events go to
+// chat via announceEvent). Deduped so we don't re-announce a URL we already have
+// (e.g. a creator who got the URL from their own ack). ---
+export function registerNotesHandlers(socket: Socket) {
+  socket.on("notes-updated", ({ url, by }: { url: string; by?: string }) => {
+    if (!url || store.getState().notesUrl === url) return;
+    store.getState().setNotesUrl(url);
+    store.getState().announceEvent(announce_notes_opened({ name: by ?? "" }));
   });
 }
 
