@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getOrCreateRoom, createPeer } from "../../room-manager.js";
 import { decideMode } from "../../recording-util.js";
 import { notifyPublicRoomCreated, notifyPublicRoomJoin } from "../../notify.js";
+import { notesEnabled } from "../../notes.js";
 import { joinSchema, chatTextSchema } from "../schemas.js";
 import { clientIp } from "../room-helpers.js";
 import type { ConnectionContext } from "../context.js";
@@ -189,6 +190,10 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
         duckingEnabled: room.duckingEnabled,
         // Recent chat so a late joiner can read/announce the last messages.
         messages: room.messages,
+        // Whether shared notes are configured for this instance (gates the
+        // "Notes" button / Alt+N) and this room's note URL if one exists yet.
+        notesEnabled: notesEnabled(),
+        notesUrl: room.notesUrl,
       });
 
       if (decision.action === "switch-to-sfu") {

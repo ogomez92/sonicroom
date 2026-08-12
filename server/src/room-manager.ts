@@ -99,6 +99,11 @@ export interface Room {
   // Rolling chat history (bounded to CHAT_HISTORY_MAX) so late joiners receive
   // recent messages on join. Newest last.
   messages: ChatMessage[];
+  // Shared collaborative note for this room (a NoteLab edit-link URL), or null
+  // until someone first opens the "Notes" button / Alt+N. Created once and then
+  // reused by everyone for the room's lifetime; lives and dies with the room.
+  // See notes.ts. Always null when the feature is unconfigured (no NOTELAB_URL).
+  notesUrl: string | null;
 }
 
 const rooms = new Map<string, Room>();
@@ -152,6 +157,7 @@ export async function getOrCreateRoom(roomName: string): Promise<Room> {
     duckingEnabled: true,
     kickVotes: new Map(),
     messages: [],
+    notesUrl: null,
   };
   rooms.set(roomName, room);
   return room;
