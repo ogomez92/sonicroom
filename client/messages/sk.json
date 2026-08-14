@@ -81,6 +81,10 @@
   "controls_leave": "Opustiť",
   "controls_speakers": "Kto hovorí",
   "controls_speakers_title": "Oznámi kto práve hovorí alebo hovoril naposledy (W)",
+  "controls_notes": "Poznámky",
+  "controls_notes_open": "Otvorí spoločné poznámky",
+  "controls_notes_title": "Vytvoriť zdieľané poznámky pre túto miestnosť — otvorí sa na novej karte (Alt+N)",
+  "controls_notes_open_title": "Otvoriť zdieľané poznámky pre túto miestnosť — otvorí sa na novej karte (Alt+N)",
 
   "chat_panel_label": "Diskusia",
   "chat_heading": "Diskusia",
@@ -262,5 +266,7 @@
   "announce_speakers_list": "Naposledy hovorili: {names}",
   "announce_music_started": "{name} spustil prehrávanie hudby",
   "announce_music_stopped": "{name} zastavil prehrávanie hudby",
+  "announce_notes_opened": "{name} otvoril zdieľané poznámky",
+  "announce_notes_failed": "Nie je možné otvoriť zdieľané poznámky",
   "announce_chat_hint": "Stlačením Alt plus číslo od 1 po 0 si môžete prečítať posledných 10 správ od najnovšej, aj keď je textová diskusia zatvorená. Stlačením toho istého čísla ešte raz skopírujete správu."
 }
