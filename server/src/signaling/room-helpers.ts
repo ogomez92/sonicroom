@@ -62,7 +62,12 @@ export function createRoomHelpers(
       room.sharers.size > 0 ||
       room.fileStreamers.size > 0 ||
       room.extraMicStreamers.size > 0 ||
-      room.disableP2p
+      room.disableP2p ||
+      // A video room never uses the P2P mesh: camera/screen video are separate
+      // producers the server has to route, so the room is pinned from its
+      // first join (before anyone turns a camera on) — no SFU↔P2P flap when
+      // the first camera comes on or the last goes off.
+      room.isVideo
     );
   }
 

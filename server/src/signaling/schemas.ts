@@ -60,6 +60,10 @@ export const joinSchema = z.object({
   // List this room publicly in the lobby (the "Make this room public" toggle /
   // `?public=true` URL param). Off by default; sticky once any joiner sets it.
   isPublic: z.boolean().optional(),
+  // Room TYPE: make this a VIDEO call (the lobby's "Video call" room type /
+  // `?video=on` URL param). Audio-first: off by default, and sticky once any
+  // joiner sets it — the whole room is then a video room (pinned to the SFU).
+  video: z.boolean().optional(),
   // Set on a reconnect if this peer was sharing audio when it dropped, so the
   // server re-pins SFU for the rejoin (the share producer is rebuilt right
   // after, in setupSfu). On a first join it's always false.

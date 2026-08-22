@@ -35,6 +35,15 @@ export interface Room {
   // Pins the room to the SFU even with <=2 peers; sticky for the room's
   // lifetime once any joiner sets it (see decideMode's forceSfu).
   disableP2p: boolean;
+  // Room TYPE: a VIDEO call (the lobby's "Video call" room type / `?video=on`).
+  // SonicRoom is audio-first, so this is off by default and sticky for the
+  // room's lifetime once any joiner sets it. A video room is pinned to the SFU
+  // (video never rides the P2P mesh — camera/screen tracks are separate
+  // "camera"/"screen" producers, like share/file), and the produce handler
+  // REJECTS any video producer unless this flag is set, so an audio room can
+  // never carry video. Clients read it from the join response and only then
+  // load their video UI.
+  isVideo: boolean;
   // Whether this room is publicly listed in the lobby (via the "Make this room
   // public" toggle / `?public=true` URL param). Private by default; sticky for
   // the room's lifetime once any joiner sets it. Listed by getPublicRooms.
@@ -142,6 +151,7 @@ export async function getOrCreateRoom(roomName: string): Promise<Room> {
     peers: new Map(),
     mode: "p2p",
     disableP2p: false,
+    isVideo: false,
     isPublic: false,
     pendingJoins: new Map(),
     admittedTokens: new Set(),
@@ -229,6 +239,7 @@ export function getRoomInfo(roomName: string): {
   participants: number;
   casters: number;
   isPublic: boolean;
+  isVideo: boolean;
   mode: RoomMode;
 } | null {
   const room = rooms.get(roomName);
@@ -238,6 +249,7 @@ export function getRoomInfo(roomName: string): {
     participants: room.peers.size,
     casters: room.casters.size,
     isPublic: room.isPublic,
+    isVideo: room.isVideo,
     mode: room.mode,
   };
 }
@@ -245,14 +257,16 @@ export function getRoomInfo(roomName: string): {
 // Snapshot of the currently-live PUBLIC rooms for the lobby list: each room's
 // name plus the display names of everyone currently in it. Private rooms are
 // omitted entirely. Rooms only exist while they hold at least one peer, so
-// `participants` is never empty.
-export function getPublicRooms(): { name: string; participants: string[] }[] {
-  const out: { name: string; participants: string[] }[] = [];
+// `participants` is never empty. `isVideo` lets the lobby flag video rooms so a
+// visitor knows a camera may be expected before they walk in.
+export function getPublicRooms(): { name: string; participants: string[]; isVideo: boolean }[] {
+  const out: { name: string; participants: string[]; isVideo: boolean }[] = [];
   for (const room of rooms.values()) {
     if (!room.isPublic) continue;
     out.push({
       name: room.name,
       participants: Array.from(room.peers.values()).map((p) => p.displayName),
+      isVideo: room.isVideo,
     });
   }
   return out;

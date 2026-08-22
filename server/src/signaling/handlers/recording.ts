@@ -24,6 +24,9 @@ export function registerRecordingHandlers(ctx: ConnectionContext) {
       const producers: ProducerInfo[] = [];
       for (const [peerId, peer] of room.peers) {
         for (const [producerId, producer] of peer.producers) {
+          // Audio only — the recorder is an Opus pipeline (video rooms' camera/
+          // screen producers are never captured).
+          if (producer.kind !== "audio") continue;
           producers.push({
             producerId,
             peerId,

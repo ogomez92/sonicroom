@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, type SyntheticEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Headphones, ArrowRight, Globe, DoorOpen } from "lucide-react";
+import { Headphones, ArrowRight, Globe, DoorOpen, Video } from "lucide-react";
 import { MicPreview } from "./MicPreview";
 import { LanguageSelect } from "./LanguageSelect";
 import { Footer } from "./Footer";
@@ -8,6 +8,7 @@ import { getLocale } from "../lib/i18n";
 import { getInstanceName, getDefaultDisplayName } from "../lib/branding";
 import { apiUrl } from "../lib/runtime-config";
 import { iosForcedByUrl } from "../lib/microphone";
+import { roomTypeFromParam, type RoomType } from "../lib/video/room-type";
 import { m } from "../paraglide/messages.js";
 
 function sanitize(input: string): string {
@@ -38,6 +39,7 @@ function isMicDisabled(value: string | null): boolean {
 interface PublicRoom {
   name: string;
   participants: string[];
+  isVideo?: boolean;
 }
 
 // Poll the public room directory so the lobby list stays fresh — the visitor
@@ -54,6 +56,11 @@ export function Lobby() {
   const [makePublic, setMakePublic] = useState(() => isPublicEnabled(searchParams.get("public")));
   const [joinWithoutMic, setJoinWithoutMic] = useState(() =>
     isMicDisabled(searchParams.get("mic")),
+  );
+  // Room TYPE — audio call is ALWAYS the default; "Video call" must be picked
+  // (or carried in by `?video=on` from a shared link). See lib/video/room-type.
+  const [roomType, setRoomType] = useState<RoomType>(() =>
+    roomTypeFromParam(searchParams.get("video")),
   );
   const [publicRooms, setPublicRooms] = useState<PublicRoom[]>([]);
   // Roving active option in the public-room listbox (-1 = none yet), mirroring
@@ -113,9 +120,12 @@ export function Lobby() {
   // that — and note that even if the visitor unticks it, the room stays public:
   // the server's isPublic flag is sticky and never downgraded for an existing
   // room (joining a same-named room can only ever keep/turn it public).
-  const selectPublicRoom = useCallback((name: string) => {
+  const selectPublicRoom = useCallback((name: string, isVideo?: boolean) => {
     setRoomName(name);
     setMakePublic(true);
+    // A listed video room is already a video room (sticky server-side) — reflect
+    // that so the visitor isn't surprised; it never flips a room the other way.
+    if (isVideo) setRoomType("video");
     setError("");
     setAnnouncement(m.lobby_public_room_selected({ name }));
     setAnnounceSeq((s) => s + 1);
@@ -163,7 +173,8 @@ export function Lobby() {
       case " ":
         e.preventDefault();
         if (activeRoomIdx >= 0 && publicRooms[activeRoomIdx]) {
-          selectPublicRoom(publicRooms[activeRoomIdx].name);
+          const room = publicRooms[activeRoomIdx];
+          selectPublicRoom(room.name, room.isVideo);
         }
         break;
     }
@@ -201,6 +212,9 @@ export function Lobby() {
       if (makePublic) params.set("public", "true");
       // Listen + text-chat only — no mic prompt (see Room's ?mic=off handling).
       if (joinWithoutMic) params.set("mic", "off");
+      // Video call: only ever set explicitly — audio is the default, so the
+      // param is simply absent for an audio room.
+      if (roomType === "video") params.set("video", "on");
       // Carry a forced iOS audio path through to the room URL so it survives a
       // reload there. It has no toggle — it's a manual override read at module
       // load in lib/microphone.ts, not lobby state.
@@ -208,7 +222,7 @@ export function Lobby() {
       const qs = params.toString();
       navigate(`/room/${sanitizedRoom}${qs ? `?${qs}` : ""}`);
     },
-    [roomName, displayName, navigate, disableP2p, makePublic, joinWithoutMic],
+    [roomName, displayName, navigate, disableP2p, makePublic, joinWithoutMic, roomType],
   );
 
   // Localized participant list ("a, b and c"), so the public room rows read
@@ -265,6 +279,57 @@ export function Lobby() {
               />
             </div>
 
+            {/* Room type. A radio group (fieldset/legend) with "Audio call"
+                ALWAYS selected by default — SonicRoom is audio-first, and video
+                is a deliberate per-room choice (also `?video=on`). Like the
+                public flag it's sticky server-side once any joiner sets it. */}
+            <fieldset>
+              <legend className="mb-1.5 text-sm font-medium text-sonic-200">
+                {m.lobby_room_type_legend()}
+              </legend>
+              <div className="space-y-2">
+                <div>
+                  <label className="flex cursor-pointer select-none items-start gap-2.5">
+                    <input
+                      type="radio"
+                      name="room-type"
+                      value="audio"
+                      checked={roomType === "audio"}
+                      onChange={() => setRoomType("audio")}
+                      aria-describedby="room-type-audio-help"
+                      className="mt-0.5 h-4 w-4 border-sonic-600 bg-sonic-700 accent-sonic-accent"
+                    />
+                    <span className="text-sm font-medium text-sonic-200">
+                      {m.lobby_room_type_audio()}
+                    </span>
+                  </label>
+                  <p id="room-type-audio-help" className="mt-1 pl-[26px] text-xs text-sonic-400">
+                    {m.lobby_room_type_audio_help()}
+                  </p>
+                </div>
+                <div>
+                  <label className="flex cursor-pointer select-none items-start gap-2.5">
+                    <input
+                      type="radio"
+                      name="room-type"
+                      value="video"
+                      checked={roomType === "video"}
+                      onChange={() => setRoomType("video")}
+                      aria-describedby="room-type-video-help"
+                      className="mt-0.5 h-4 w-4 border-sonic-600 bg-sonic-700 accent-sonic-accent"
+                    />
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-sonic-200">
+                      <Video className="h-4 w-4 text-sonic-accent" aria-hidden="true" />
+                      {m.lobby_room_type_video()}
+                    </span>
+                  </label>
+                  <p id="room-type-video-help" className="mt-1 pl-[26px] text-xs text-sonic-400">
+                    {m.lobby_room_type_video_help()}
+                  </p>
+                </div>
+              </div>
+            </fieldset>
+
             <div>
               <label
                 htmlFor="display-name"
@@ -314,13 +379,16 @@ export function Lobby() {
                 >
                   {publicRooms.map((room, i) => {
                     const participantsText = listFmt.format(room.participants);
-                    const label =
+                    const baseLabel =
                       room.participants.length > 0
                         ? m.lobby_public_room_with_participants({
                             name: room.name,
                             participants: participantsText,
                           })
                         : m.lobby_public_room_empty({ name: room.name });
+                    const label = room.isVideo
+                      ? `${baseLabel}, ${m.lobby_public_room_video_fragment()}`
+                      : baseLabel;
                     return (
                       <li
                         key={room.name}
@@ -332,7 +400,7 @@ export function Lobby() {
                           if (el) roomOptionRefs.current.set(room.name, el);
                           else roomOptionRefs.current.delete(room.name);
                         }}
-                        onClick={() => selectPublicRoom(room.name)}
+                        onClick={() => selectPublicRoom(room.name, room.isVideo)}
                         className={`group flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 transition-colors ${
                           i === activeRoomIdx
                             ? "border-sonic-accent bg-sonic-accent/15"
@@ -344,8 +412,14 @@ export function Lobby() {
                           aria-hidden="true"
                         />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-sonic-100">
+                          <span className="flex items-center gap-1.5 truncate text-sm font-medium text-sonic-100">
                             {room.name}
+                            {room.isVideo && (
+                              <Video
+                                className="h-3.5 w-3.5 shrink-0 text-sonic-accent"
+                                aria-hidden="true"
+                              />
+                            )}
                           </span>
                           {participantsText && (
                             <span className="block truncate text-xs text-sonic-400">

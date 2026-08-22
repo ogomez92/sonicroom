@@ -169,6 +169,31 @@ export type ChatAnnounceMode = "polite" | "assertive" | "tts" | "off";
 
 const CHAT_ANNOUNCE_KEY = "sonicroom:chatAnnounceMode";
 
+// VIDEO rooms only. Face-centering guidance (spoken hints while your camera is
+// on) is opt-OUT — default on, persisted. The Claude API key for "describe this
+// video" is the user's own, kept in THIS browser only (never sent to the
+// SonicRoom server) — same "remember my settings" treatment as the Icecast
+// password.
+const VIDEO_GUIDANCE_KEY = "sonicroom:videoGuidance";
+const CLAUDE_API_KEY_KEY = "sonicroom:claudeApiKey";
+
+function loadVideoGuidance(): boolean {
+  try {
+    return localStorage.getItem(VIDEO_GUIDANCE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+// An incoming camera/screen video tile (video rooms only): one remote producer
+// owned by `peerId`. The MediaStream itself lives in the video controller
+// (lib/video/video-media.ts) — the store holds only this serialisable record.
+export interface VideoTile {
+  producerId: string;
+  peerId: string;
+  source: "camera" | "screen";
+}
+
 function loadChatAnnounceMode(): ChatAnnounceMode {
   const v = loadString(CHAT_ANNOUNCE_KEY);
   return v === "assertive" || v === "tts" || v === "off" ? v : "polite";
@@ -205,6 +230,11 @@ export interface PeerState {
   // yourself. Distinct from `isMuted` (the peer's own mic mute, server-reported)
   // and from room-wide deafen.
   localMuted: boolean;
+  // VIDEO rooms only: whether this peer currently has their camera on / is
+  // sharing their screen's picture (drives the participant-list indicators +
+  // the "Describe X's video / screen" options). Always false in audio rooms.
+  hasVideo: boolean;
+  hasScreen: boolean;
 }
 
 export type RoomMode = "p2p" | "sfu";
@@ -332,6 +362,21 @@ interface RoomState {
   notesEnabled: boolean;
   notesUrl: string | null;
 
+  // Room TYPE (video rooms). roomIsVideo comes from the join response (sticky
+  // server-side) — the ONLY thing that loads the video UI/media; false for
+  // every audio room. isVideoOn: our own camera (always starts off; you never
+  // enter with video on). videoTiles: the incoming camera/screen tiles, keyed
+  // by producerId. localVideoSeq bumps whenever our local camera stream
+  // changes so the self tile re-attaches. videoGuidanceEnabled: the spoken
+  // face-centering hints toggle (persisted, default on). claudeApiKey: the
+  // user's own key for "describe this video" (persisted in this browser only).
+  roomIsVideo: boolean;
+  isVideoOn: boolean;
+  videoTiles: Map<string, VideoTile>;
+  localVideoSeq: number;
+  videoGuidanceEnabled: boolean;
+  claudeApiKey: string;
+
   // Peers
   peers: Map<string, PeerState>;
 
@@ -383,6 +428,16 @@ interface RoomState {
   setKicked: (kicked: boolean) => void;
   setNotesEnabled: (enabled: boolean) => void;
   setNotesUrl: (url: string | null) => void;
+  setRoomIsVideo: (isVideo: boolean) => void;
+  setVideoOn: (on: boolean) => void;
+  addVideoTile: (tile: VideoTile) => void;
+  removeVideoTile: (producerId: string) => void;
+  clearVideoTiles: () => void;
+  bumpLocalVideo: () => void;
+  setVideoGuidanceEnabled: (enabled: boolean) => void;
+  setClaudeApiKey: (key: string) => void;
+  setPeerVideo: (peerId: string, hasVideo: boolean) => void;
+  setPeerScreen: (peerId: string, hasScreen: boolean) => void;
   addMessage: (message: ChatMessage) => void;
   addPeer: (peerId: string, displayName: string) => void;
   removePeer: (peerId: string) => void;
@@ -447,6 +502,12 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   kicked: false,
   notesEnabled: false,
   notesUrl: null,
+  roomIsVideo: false,
+  isVideoOn: false,
+  videoTiles: new Map(),
+  localVideoSeq: 0,
+  videoGuidanceEnabled: loadVideoGuidance(),
+  claudeApiKey: loadString(CLAUDE_API_KEY_KEY),
   peers: new Map(),
   speakerBadges: {},
   messages: [],
@@ -534,6 +595,47 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   setKicked: (kicked) => set({ kicked }),
   setNotesEnabled: (notesEnabled) => set({ notesEnabled }),
   setNotesUrl: (notesUrl) => set({ notesUrl }),
+  setRoomIsVideo: (roomIsVideo) => set({ roomIsVideo }),
+  setVideoOn: (isVideoOn) => set({ isVideoOn }),
+  addVideoTile: (tile) =>
+    set((s) => {
+      const videoTiles = new Map(s.videoTiles);
+      videoTiles.set(tile.producerId, tile);
+      return { videoTiles };
+    }),
+  removeVideoTile: (producerId) =>
+    set((s) => {
+      if (!s.videoTiles.has(producerId)) return s;
+      const videoTiles = new Map(s.videoTiles);
+      videoTiles.delete(producerId);
+      return { videoTiles };
+    }),
+  clearVideoTiles: () => set((s) => (s.videoTiles.size === 0 ? s : { videoTiles: new Map() })),
+  bumpLocalVideo: () => set((s) => ({ localVideoSeq: s.localVideoSeq + 1 })),
+  setVideoGuidanceEnabled: (videoGuidanceEnabled) => {
+    saveString(VIDEO_GUIDANCE_KEY, String(videoGuidanceEnabled));
+    set({ videoGuidanceEnabled });
+  },
+  setClaudeApiKey: (claudeApiKey) => {
+    saveString(CLAUDE_API_KEY_KEY, claudeApiKey);
+    set({ claudeApiKey });
+  },
+  setPeerVideo: (peerId, hasVideo) =>
+    set((state) => {
+      const peer = state.peers.get(peerId);
+      if (!peer || peer.hasVideo === hasVideo) return state;
+      const peers = new Map(state.peers);
+      peers.set(peerId, { ...peer, hasVideo });
+      return { peers };
+    }),
+  setPeerScreen: (peerId, hasScreen) =>
+    set((state) => {
+      const peer = state.peers.get(peerId);
+      if (!peer || peer.hasScreen === hasScreen) return state;
+      const peers = new Map(state.peers);
+      peers.set(peerId, { ...peer, hasScreen });
+      return { peers };
+    }),
 
   // Room-event announcement (recording/share/music/mute…): speak it AND log it
   // into the chat history as a "system" entry, so chat is the single timeline
@@ -615,6 +717,8 @@ export const useRoomStore = create<RoomState>((set, get) => ({
         kickVotes: 0,
         iVotedKick: false,
         localMuted: false,
+        hasVideo: false,
+        hasScreen: false,
       });
       return { peers };
     }),
@@ -750,6 +854,12 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       // from the next join response anyway, so resetting it is harmless.
       notesEnabled: false,
       notesUrl: null,
+      // Video is per-room live state; the guidance toggle + API key are
+      // persisted preferences and survive.
+      roomIsVideo: false,
+      isVideoOn: false,
+      videoTiles: new Map(),
+      localVideoSeq: 0,
       peers: new Map(),
       speakerBadges: {},
       messages: [],

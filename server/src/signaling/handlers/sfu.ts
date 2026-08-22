@@ -76,14 +76,30 @@ export function registerSfuHandlers(ctx: ConnectionContext) {
           // "music" for a caster's stereo track, "share" for a peer's stereo
           // system/tab-audio share, "file" for a peer streaming a local audio
           // file, "mic" for an EXTRA microphone (a separate producer alongside
-          // the peer's voice), "voice" (default) for the primary mic.
-          source: z.enum(["voice", "music", "share", "file", "mic"]).optional(),
+          // the peer's voice), "voice" (default) for the primary mic. VIDEO
+          // rooms only: "camera" for a peer's webcam, "screen" for the video
+          // half of their screen share.
+          source: z.enum(["voice", "music", "share", "file", "mic", "camera", "screen"]).optional(),
           // Human-readable detail for a media producer (extra-mic device name,
           // file name / URL), shown alongside the owner in the participant list.
           // Trusted only as a display string; capped so a peer can't flood it.
           title: z.string().trim().max(120).optional(),
         })
         .parse(data);
+
+      // Audio-first, enforced server-side: video is only ever routed in a
+      // VIDEO room, and the kind must match the source (a "camera" producer is
+      // video, everything else is audio) so a client can't smuggle a video
+      // track under an audio label or vice versa.
+      const isVideoSource = source === "camera" || source === "screen";
+      if (kind === "video" && !currentRoom.isVideo) {
+        cb({ ok: false, error: "not_video_room" });
+        return;
+      }
+      if ((kind === "video") !== isVideoSource) {
+        cb({ ok: false, error: "kind_source_mismatch" });
+        return;
+      }
 
       const producer = await currentPeer.sendTransport!.produce({
         kind,
@@ -105,19 +121,20 @@ export function registerSfuHandlers(ctx: ConnectionContext) {
       // If the room is being recorded and/or streamed, tap this producer for
       // each too. Not awaited — the produce callback should return promptly,
       // and the recorder/feed spins up in the background. Recording and
-      // streaming each consume the producer independently.
+      // streaming each consume the producer independently. Audio only: the
+      // recorder/mixer are Opus pipelines, so video producers are never tapped.
       const producerInfo: ProducerInfo = {
         producerId: producer.id,
         peerId: socket.id,
         label: currentPeer.displayName,
         source: source ?? "voice",
       };
-      if (recordingManager.isRecording(currentRoom.name)) {
+      if (producer.kind === "audio" && recordingManager.isRecording(currentRoom.name)) {
         void recordingManager
           .addProducer(currentRoom.name, producerInfo)
           .catch((err) => console.error("[recording] addProducer failed:", err));
       }
-      if (streamManager.isStreaming(currentRoom.name)) {
+      if (producer.kind === "audio" && streamManager.isStreaming(currentRoom.name)) {
         void streamManager
           .addProducer(currentRoom.name, producerInfo)
           .catch((err) => console.error("[streaming] addProducer failed:", err));

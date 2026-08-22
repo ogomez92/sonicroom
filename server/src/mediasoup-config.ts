@@ -35,6 +35,17 @@ export const routerOptions: RouterOptions = {
         ptime: 10,
       },
     },
+    // Video is only ever produced in a VIDEO room (room.isVideo — the produce
+    // handler rejects video elsewhere). VP8 is the universal WebRTC baseline
+    // (every browser, software-encodable everywhere), which matters more here
+    // than H.264's hardware paths; the start-bitrate hint keeps the first
+    // seconds from looking like a slideshow before BWE ramps.
+    {
+      kind: "video",
+      mimeType: "video/VP8",
+      clockRate: 90000,
+      parameters: { "x-google-start-bitrate": 800 },
+    },
   ],
 };
 

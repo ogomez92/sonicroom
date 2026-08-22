@@ -12,6 +12,8 @@
     "typecheck:test": "pnpm run paraglide && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
+    "@mediapipe/tasks-vision": "^1.0.1",
     "lucide-react": "^0.510.0",
     "mediasoup-client": "^3.20.0",
     "react": "^19.1.0",

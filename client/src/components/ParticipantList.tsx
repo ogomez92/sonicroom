@@ -11,6 +11,9 @@ import {
   CircleStop,
   ChevronRight,
   ChevronLeft,
+  Video,
+  MonitorUp,
+  ScanEye,
 } from "lucide-react";
 import type { PeerState } from "../stores/room";
 import { m } from "../paraglide/messages.js";
@@ -42,6 +45,10 @@ interface ParticipantListProps {
   // peerId → rank (1-based) for the most recent talkers, shown as a transient
   // numbered badge on the tile (set by the W shortcut / button, auto-cleared).
   speakerBadges: Record<string, number>;
+  // VIDEO rooms only (undefined in audio rooms, so nothing video-related is
+  // offered): have Claude describe a snapshot of this peer's camera / screen
+  // (or our own camera). Offered as options in the participant's menu.
+  onDescribeVideo?: (peerId: string, source: "camera" | "screen") => void;
 }
 
 function getInitials(name: string): string {
@@ -79,6 +86,7 @@ export function ParticipantList({
   onStopStream,
   announce,
   speakerBadges,
+  onDescribeVideo,
 }: ParticipantListProps) {
   const rows = useMemo(() => [selfPeer, ...peerList], [selfPeer, peerList]);
   const isSelf = (peerId: string) => peerId === selfPeer.peerId;
@@ -138,6 +146,9 @@ export function ParticipantList({
     if (textOnly) label += `, ${m.card_text_only()}`;
     else if (peer.isMuted) label += `, ${m.card_muted_fragment()}`;
     if (peer.isSpeaking) label += `, ${m.card_speaking_fragment()}`;
+    // Video-room status (false everywhere in an audio room).
+    if (peer.hasVideo) label += `, ${m.participants_sharing_video()}`;
+    if (peer.hasScreen) label += `, ${m.participants_sharing_screen()}`;
     if (peer.localMuted) label += `, ${m.participants_muted_fragment()}`;
     if (kickEnabled && !peer.isMusic && !peer.isMicStream && !self && peer.kickVotes > 0) {
       label += `, ${peer.kickVotes === 1 ? m.card_votes_one() : m.card_votes_many({ count: peer.kickVotes })}`;
@@ -201,6 +212,7 @@ export function ParticipantList({
         // The tile's key is the producerId the stop targets.
         showStopStream={(openPeer.isMusic && !openPeer.isCaster) || openPeer.isMicStream}
         onStopStream={onStopStream}
+        onDescribeVideo={onDescribeVideo}
         announce={announce}
         onClose={closeOptions}
       />
@@ -297,6 +309,15 @@ export function ParticipantList({
               )}
             </div>
 
+            {/* Video-room indicators (camera on / screen shared). Visual only
+                here — the row's aria-label carries the same words. */}
+            {peer.hasVideo && (
+              <Video className="h-4 w-4 shrink-0 text-sonic-accent" aria-hidden="true" />
+            )}
+            {peer.hasScreen && (
+              <MonitorUp className="h-4 w-4 shrink-0 text-sonic-accent" aria-hidden="true" />
+            )}
+
             {/* Status icon */}
             {peer.localMuted ? (
               <VolumeX className="h-4 w-4 shrink-0 text-sonic-400" aria-hidden="true" />
@@ -343,6 +364,8 @@ interface ParticipantOptionsProps {
   // Share/file media tile only: offer an immediate "Stop this stream" action.
   showStopStream: boolean;
   onStopStream: (producerId: string) => void;
+  // Video rooms only: "Describe X's video / screen" (Claude). Undefined elsewhere.
+  onDescribeVideo?: (peerId: string, source: "camera" | "screen") => void;
   announce: (message: string) => void;
   onClose: () => void;
 }
@@ -395,6 +418,7 @@ function ParticipantOptions({
   onKickCaster,
   showStopStream,
   onStopStream,
+  onDescribeVideo,
   announce,
   onClose,
 }: ParticipantOptionsProps) {
@@ -402,7 +426,8 @@ function ParticipantOptions({
   const votesPhrase =
     peer.kickVotes === 1 ? m.card_votes_one() : m.card_votes_many({ count: peer.kickVotes });
 
-  // Options for this participant, in display order. Self gets only the mic level.
+  // Options for this participant, in display order. Self gets the mic level
+  // (and, in a video room with our camera on, "Describe my video").
   const opts: OptionDef[] = [];
   if (isSelf) {
     if (hasMic) {
@@ -416,6 +441,14 @@ function ParticipantOptions({
           label: m.card_your_mic_level(),
           percent: toPercent(micGain),
         }),
+      });
+    }
+    if (onDescribeVideo && peer.hasVideo) {
+      opts.push({
+        id: "describe-video",
+        kind: "toggle",
+        ariaLabel: m.card_describe_my_video(),
+        activate: () => onDescribeVideo(peer.peerId, "camera"),
       });
     }
   } else {
@@ -473,6 +506,24 @@ function ParticipantOptions({
         kind: "toggle",
         ariaLabel: m.card_stop_stream({ name }),
         activate: () => onStopStream(peer.peerId),
+      });
+    }
+    // Video room: have Claude describe a snapshot of their camera / screen.
+    // Only offered while that picture is actually live.
+    if (onDescribeVideo && peer.hasVideo) {
+      opts.push({
+        id: "describe-video",
+        kind: "toggle",
+        ariaLabel: m.card_describe_video({ name }),
+        activate: () => onDescribeVideo(peer.peerId, "camera"),
+      });
+    }
+    if (onDescribeVideo && peer.hasScreen) {
+      opts.push({
+        id: "describe-screen",
+        kind: "toggle",
+        ariaLabel: m.card_describe_screen({ name }),
+        activate: () => onDescribeVideo(peer.peerId, "screen"),
       });
     }
   }
@@ -575,6 +626,25 @@ function ParticipantOptions({
         <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-sonic-100">{name}</h2>
       </div>
 
+      {/* Video-room status line: what this participant is currently sharing.
+          Visible icons + the same words as text, so it's read by the menu too. */}
+      {(peer.hasVideo || peer.hasScreen) && (
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-sonic-300">
+          {peer.hasVideo && (
+            <span className="flex items-center gap-1">
+              <Video className="h-3.5 w-3.5 text-sonic-accent" aria-hidden="true" />
+              {m.participants_sharing_video()}
+            </span>
+          )}
+          {peer.hasScreen && (
+            <span className="flex items-center gap-1">
+              <MonitorUp className="h-3.5 w-3.5 text-sonic-accent" aria-hidden="true" />
+              {m.participants_sharing_screen()}
+            </span>
+          )}
+        </p>
+      )}
+
       {opts.length === 0 ? (
         <p className="px-1 py-2 text-sm text-sonic-400">{m.participants_no_options()}</p>
       ) : (
@@ -593,6 +663,8 @@ function ParticipantOptions({
             const kickOn = opt.id === "kick" && peer.iVotedKick;
             const removeCaster = opt.id === "remove-caster";
             const stopStream = opt.id === "stop-stream";
+            const describeVideo = opt.id === "describe-video";
+            const describeScreen = opt.id === "describe-screen";
             const destructive = removeCaster || stopStream;
             return (
               <li
@@ -662,6 +734,17 @@ function ParticipantOptions({
                   <>
                     <CircleStop className="h-4 w-4 shrink-0" aria-hidden="true" />
                     <span className="truncate">{m.card_stop_stream_label()}</span>
+                  </>
+                ) : describeVideo || describeScreen ? (
+                  <>
+                    <ScanEye className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="truncate">
+                      {describeScreen
+                        ? m.card_describe_screen_label()
+                        : isSelf
+                          ? m.card_describe_my_video()
+                          : m.card_describe_video_label()}
+                    </span>
                   </>
                 ) : (
                   <>

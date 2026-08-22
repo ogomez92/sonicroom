@@ -13,6 +13,7 @@ import { registerRecordingHandlers } from "./signaling/handlers/recording.js";
 import { registerStreamingHandlers } from "./signaling/handlers/streaming.js";
 import { registerModerationHandlers } from "./signaling/handlers/moderation.js";
 import { registerNotesHandlers } from "./signaling/handlers/notes.js";
+import { registerVideoHandlers } from "./signaling/handlers/video.js";
 
 export function createSignalingServer(
   httpServer: HttpServer,
@@ -87,6 +88,7 @@ export function createSignalingServer(
     registerStreamingHandlers(ctx);
     registerModerationHandlers(ctx);
     registerNotesHandlers(ctx);
+    registerVideoHandlers(ctx);
   });
 
   return { io };

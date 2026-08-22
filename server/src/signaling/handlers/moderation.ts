@@ -175,6 +175,17 @@ export function registerModerationHandlers(ctx: ConnectionContext) {
 
     owner.producers.get(producerId)?.close();
     owner.producers.delete(producerId);
+    // A share in a VIDEO room is one share with two producers (audio "share" +
+    // the "screen" picture): stopping the share stops both. Video is never
+    // recorded/streamed, so there's nothing to release for it.
+    if (source === "share") {
+      for (const [id, prod] of owner.producers) {
+        if ((prod.appData?.source as string) === "screen") {
+          prod.close();
+          owner.producers.delete(id);
+        }
+      }
+    }
     // Stop its capture/feed if recording/streaming — otherwise the recorder/
     // mixer idles on a dead port until it ends.
     if (recordingManager.isRecording(room.name)) {

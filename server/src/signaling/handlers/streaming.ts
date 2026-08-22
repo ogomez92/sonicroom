@@ -36,6 +36,9 @@ export function registerStreamingHandlers(ctx: ConnectionContext) {
       const producers: ProducerInfo[] = [];
       for (const [peerId, peer] of room.peers) {
         for (const [producerId, producer] of peer.producers) {
+          // Audio only — the mixer is an Opus/MP3 pipeline (video rooms'
+          // camera/screen producers are never mixed).
+          if (producer.kind !== "audio") continue;
           const src = (producer.appData?.source as string) ?? "voice";
           producers.push({ producerId, peerId, label: peer.displayName, source: src });
         }

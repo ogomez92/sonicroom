@@ -19,7 +19,9 @@ export type Cue =
   | "share-stop"
   | "knock"
   | "peer-mute"
-  | "peer-unmute";
+  | "peer-unmute"
+  | "video-on"
+  | "video-off";
 
 interface ToneSpec {
   freq: number;
@@ -366,6 +368,19 @@ export function playCue(ctx: AudioContext, cue: Cue) {
       break;
     case "peer-unmute":
       tone(ctx, { freq: 340, glideTo: 520, dur: 0.12, type: "triangle", gain: 0.1, release: 0.05 });
+      break;
+    // A camera turned on/off (ours or a peer's, VIDEO rooms only): a camera
+    // "shutter" — a short bright click plus a two-note sine blip, rising for on
+    // and falling for off. Distinct from the share arpeggio and the mute slides.
+    case "video-on":
+      noise(ctx, { dur: 0.02, freq: 2400, gain: 0.16, type: "bandpass", q: 2.5 });
+      tone(ctx, { freq: 587, dur: 0.1, type: "sine", gain: 0.13, delay: 0.03 });
+      tone(ctx, { freq: 880, dur: 0.16, type: "sine", gain: 0.13, delay: 0.12 });
+      break;
+    case "video-off":
+      noise(ctx, { dur: 0.02, freq: 2400, gain: 0.16, type: "bandpass", q: 2.5 });
+      tone(ctx, { freq: 880, dur: 0.1, type: "sine", gain: 0.13, delay: 0.03 });
+      tone(ctx, { freq: 587, dur: 0.16, type: "sine", gain: 0.13, delay: 0.12 });
       break;
   }
 }

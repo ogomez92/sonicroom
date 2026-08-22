@@ -64,6 +64,8 @@ describe("peer map actions", () => {
       kickVotes: 0,
       iVotedKick: false,
       localMuted: false,
+      hasVideo: false,
+      hasScreen: false,
     });
   });
 

@@ -1,6 +1,6 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useRef, useState, lazy, Suspense } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { Headphones, Users, Loader2, Circle, MessageSquare, Radio } from "lucide-react";
+import { Headphones, Users, Loader2, Circle, MessageSquare, Radio, Video } from "lucide-react";
 import { useRoomStore } from "../stores/room";
 import { useMediasoup } from "../hooks/useMediasoup";
 import { formatMessage, messageContent } from "../lib/chat";
@@ -13,7 +13,14 @@ import { Chat } from "./Chat";
 import { JoinRequests } from "./JoinRequests";
 import { LanguageSelect } from "./LanguageSelect";
 import { Footer, PoweredBy } from "./Footer";
+import { isVideoRoomParam } from "../lib/video/room-type";
 import { m } from "../paraglide/messages.js";
+
+// VIDEO rooms only: the video grid and the video toolbar are separate lazy
+// chunks, mounted solely when the join response says the room is a video room —
+// an audio room never downloads or renders any video component.
+const VideoStage = lazy(() => import("./video/VideoStage"));
+const VideoControls = lazy(() => import("./video/VideoControls"));
 
 type JoinState = "idle" | "joining" | "joined" | "error";
 
@@ -70,6 +77,9 @@ export function Room() {
     (p2pStorageKey != null && sessionStorage.getItem(p2pStorageKey) === "1");
   const makePublic = isPublicEnabled(searchParams.get("public"));
   const noMic = isMicDisabled(searchParams.get("mic"));
+  // Room type from the URL (`?video=on`, set by the lobby's "Video call" radio).
+  // Only a REQUEST: the server's (sticky) answer is `roomIsVideo` in the store.
+  const videoRequested = isVideoRoomParam(searchParams.get("video"));
   const navigate = useNavigate();
   const {
     join,
@@ -96,6 +106,10 @@ export function Room() {
     stopPeerStream,
     announceSpeakers,
     openNotes,
+    toggleVideo,
+    describeVideo,
+    getLocalVideoStream,
+    getVideoStream,
   } = useMediasoup();
 
   const [joinState, setJoinState] = useState<JoinState>("idle");
@@ -184,6 +198,9 @@ export function Room() {
   // ourselves were just voted out (shows the "removed" screen).
   const roomIsPublic = useRoomStore((s) => s.roomIsPublic);
   const kicked = useRoomStore((s) => s.kicked);
+  // Room type (server truth) + our own camera state, for the self row.
+  const roomIsVideo = useRoomStore((s) => s.roomIsVideo);
+  const isVideoOn = useRoomStore((s) => s.isVideoOn);
 
   // Reflect the room name in the document/tab title while in (or joining) the
   // room, restoring the default when we leave.
@@ -225,7 +242,7 @@ export function Room() {
     // re-asserts it even without the URL param.
     if (disableP2p && p2pStorageKey) sessionStorage.setItem(p2pStorageKey, "1");
 
-    join(roomName, name, { disableP2p, isPublic: makePublic, noMic })
+    join(roomName, name, { disableP2p, isPublic: makePublic, noMic, video: videoRequested })
       .then(() => setJoinState("joined"))
       .catch((err) => {
         setJoinState("error");
@@ -239,7 +256,17 @@ export function Room() {
             : msg || m.room_failed_to_join(),
         );
       });
-  }, [roomName, join, navigate, disableP2p, makePublic, noMic, p2pStorageKey, searchParams]);
+  }, [
+    roomName,
+    join,
+    navigate,
+    disableP2p,
+    makePublic,
+    noMic,
+    videoRequested,
+    p2pStorageKey,
+    searchParams,
+  ]);
 
   // Mirror room lifecycle to the host page when embedded (see postToHost).
   useEffect(() => {
@@ -341,6 +368,10 @@ export function Room() {
         // Announce + briefly number the people talking now / who talked recently.
         e.preventDefault();
         announceSpeakers();
+      } else if ((e.key === "v" || e.key === "V") && useRoomStore.getState().roomIsVideo) {
+        // Video rooms only: toggle our camera. In an audio room V is left alone.
+        e.preventDefault();
+        toggleVideo();
       }
     };
 
@@ -356,6 +387,7 @@ export function Room() {
     toggleRecording,
     announceSpeakers,
     openNotes,
+    toggleVideo,
   ]);
 
   const handleLeave = useCallback(() => {
@@ -454,6 +486,15 @@ export function Room() {
           <h1 className="text-lg font-semibold text-sonic-100">{roomName}</h1>
         </div>
         <div className="flex items-center gap-3 text-sm text-sonic-300">
+          {roomIsVideo && (
+            <span
+              className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs font-medium bg-sonic-accent/20 text-sonic-accent"
+              title={m.room_video_badge_title()}
+            >
+              <Video className="h-3 w-3" aria-hidden="true" />
+              {m.room_video_badge()}
+            </span>
+          )}
           {isRecording && (
             <span
               className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs font-medium bg-red-500/20 text-red-400"
@@ -519,7 +560,18 @@ export function Room() {
 
       {/* Participants grid + optional chat side panel */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <main className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto p-6">
+        <main
+          className={`flex min-w-0 flex-1 overflow-y-auto p-6 ${
+            roomIsVideo ? "flex-col items-center gap-6" : "items-center justify-center"
+          }`}
+        >
+          {/* Video room: the video grid sits in the foreground, above the list.
+              Lazy chunk — never loaded in an audio room. */}
+          {roomIsVideo && (
+            <Suspense fallback={null}>
+              <VideoStage getLocalStream={getLocalVideoStream} getStream={getVideoStream} />
+            </Suspense>
+          )}
           {/* Self + everyone (and every stream) as one keyboard-navigable
               listbox; Enter on a row opens that participant's options (volume,
               local mute, vote-to-kick), self's being the mic level. */}
@@ -537,6 +589,8 @@ export function Room() {
                 kickVotes: 0,
                 iVotedKick: false,
                 localMuted: false,
+                hasVideo: isVideoOn,
+                hasScreen: false,
               }}
               peerList={peerList}
               hasMic={hasMic}
@@ -550,6 +604,7 @@ export function Room() {
               onStopStream={stopPeerStream}
               announce={announce}
               speakerBadges={speakerBadges}
+              onDescribeVideo={roomIsVideo ? describeVideo : undefined}
             />
           )}
         </main>
@@ -563,6 +618,13 @@ export function Room() {
           inside this single footer landmark (rather than a second <Footer />) so
           the active call keeps exactly one `contentinfo`. */}
       <footer className="flex flex-col items-center gap-2 border-t border-sonic-700 p-4">
+        {/* Video room: camera on/off + face-centering guidance + Claude API key.
+            Lazy chunk — never loaded in an audio room. */}
+        {roomIsVideo && (
+          <Suspense fallback={null}>
+            <VideoControls onToggleVideo={toggleVideo} getLocalStream={getLocalVideoStream} />
+          </Suspense>
+        )}
         <AudioControls
           onToggleMute={toggleMute}
           onToggleAudioShare={toggleAudioShare}

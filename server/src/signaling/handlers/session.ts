@@ -30,6 +30,7 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
         role,
         disableP2p,
         isPublic,
+        video,
         sharing,
         fileStreaming,
         extraMic,
@@ -51,6 +52,9 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
       // born) apart from "joined an already-public room", and so the knock
       // gate sees the room's public state as the visitor saw it in the lobby.
       const wasPublic = room.isPublic;
+      // Likewise for the room type, so we can tell peers already inside that
+      // this join just turned the room into a video call.
+      const wasVideo = room.isVideo;
 
       // Knock-to-join: a newcomer to an ALREADY-public, occupied room must be
       // let in by someone inside. Skipping the gate: casters (infra, e.g.
@@ -75,7 +79,7 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
       }
 
       console.log(
-        `[ws] ${socket.id} joined ${roomName} as "${displayName}"${role ? ` (${role})` : ""}${disableP2p ? " (p2p disabled)" : ""}${isPublic ? " (public)" : ""}`,
+        `[ws] ${socket.id} joined ${roomName} as "${displayName}"${role ? ` (${role})` : ""}${disableP2p ? " (p2p disabled)" : ""}${isPublic ? " (public)" : ""}${video ? " (video)" : ""}`,
       );
 
       // Admitted (open join, reconnect, or just-approved): remember the token
@@ -95,6 +99,8 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
       if (disableP2p) room.disableP2p = true;
       // Public listing is sticky for the room's lifetime, like disableP2p.
       if (isPublic) room.isPublic = true;
+      // Video room type is sticky too, and pins the SFU (see shouldForceSfu).
+      if (video) room.isVideo = true;
       // A peer reconnecting mid-share re-pins SFU before the mode is decided,
       // so the rejoin lands straight in SFU and its share producer rebuilds.
       if (sharing) room.sharers.add(socket.id);
@@ -113,6 +119,12 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
         peerId: socket.id,
         displayName,
       });
+
+      // This join just made an existing audio room a video room (the flag is
+      // sticky, so it can only ever go audio → video). Tell everyone already
+      // inside so they load their video UI/media too — the joiner learns it from
+      // `isVideo` in its own join response.
+      if (room.isVideo && !wasVideo) socket.to(roomName).emit("room-video", {});
 
       // Ping the operator's off-box noty daemon on public-room activity
       // (target + on/off live in .env, hidden from users). Fire-and-forget:
@@ -142,9 +154,11 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
       }
 
       // Send existing peers to the new joiner. Each producer carries its
-      // `source` ("voice" | "music") so a late joiner can label/treat the
-      // music caster as a media source without waiting for a new-producer event,
-      // plus its `title` (device/file detail) so media tiles read in full at once.
+      // `source` ("voice" | "music" | … | "camera" | "screen") and `kind` so a
+      // late joiner can label/treat the music caster as a media source — or
+      // route a video producer to its video tile — without waiting for a
+      // new-producer event, plus its `title` (device/file detail) so media
+      // tiles read in full at once.
       const existingPeers = Array.from(room.peers.entries())
         .filter(([id]) => id !== socket.id)
         .map(([id, p]) => ({
@@ -153,6 +167,7 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
           muted: p.muted,
           producers: Array.from(p.producers.values()).map((prod) => ({
             producerId: prod.id,
+            kind: prod.kind,
             source: (prod.appData?.source as string) ?? "voice",
             title: (prod.appData?.title as string) || undefined,
           })),
@@ -171,6 +186,9 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
         // Whether this room is publicly listed — gates the vote-to-kick UI
         // (only public rooms can vote-kick; private rooms are link-gated).
         isPublic: room.isPublic,
+        // Room type. The client loads its video UI/media ONLY when this is
+        // true — an audio room never renders or captures any video.
+        isVideo: room.isVideo,
         // Current vote-to-kick tallies so a (re)joiner renders existing votes
         // (their own vote state always starts clear — votes are per session).
         kickVotes: Array.from(room.kickVotes.entries()).map(([targetId, voters]) => ({

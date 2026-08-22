@@ -30,9 +30,12 @@ export function registerStreamHandlers(ctx: ConnectionContext) {
     const { currentRoom, currentPeer } = session;
     currentRoom.sharers.delete(socket.id);
     // Close this peer's share producer(s) so consumers stop receiving the
-    // music; the matching consumers close client-side via share-stopped.
+    // music; the matching consumers close client-side via share-stopped. In a
+    // VIDEO room the share also carries a "screen" video producer — one share,
+    // two producers — so it's closed by the same stop.
     for (const [id, producer] of currentPeer.producers) {
-      if ((producer.appData?.source as string) === "share") {
+      const src = producer.appData?.source as string;
+      if (src === "share" || src === "screen") {
         producer.close();
         currentPeer.producers.delete(id);
         // Also stop its capture/feed if recording/streaming — otherwise the
