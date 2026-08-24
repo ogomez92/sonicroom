@@ -69,7 +69,11 @@ import {
   registerChatHandlers,
   registerNotesHandlers,
 } from "../lib/socket/room-event-handlers";
-import { sharedAudioContext, resumeContext } from "../lib/audio/shared-context";
+import {
+  getSharedAudioContext,
+  hasSharedAudioContext,
+  resumeContext,
+} from "../lib/audio/shared-context";
 import type { VideoMedia, VideoSource } from "../lib/video/video-media";
 
 // ICE servers (with optional per-instance overrides) live in runtime-config.ts —
@@ -244,7 +248,7 @@ export function useMediasoup() {
   // SFU device/recvTransport through getters, and the per-render socket through
   // the stable `emit` (which late-binds socketRef at call time).
   const registryRef = useRef(
-    new PeerAudioRegistry(sharedAudioContext, store, emit, {
+    new PeerAudioRegistry(getSharedAudioContext, store, emit, {
       getDevice: () => deviceRef.current,
       getRecvTransport: () => recvTransportRef.current,
     }),
@@ -256,7 +260,7 @@ export function useMediasoup() {
   // send transport / device through getters. The hook keeps the DOM/socket
   // orchestration (getDisplayMedia, the <audio> element, emits, cues).
   const graphRef = useRef(
-    new OutgoingAudioGraph(sharedAudioContext, store, {
+    new OutgoingAudioGraph(getSharedAudioContext, store, {
       getSendTransport: () => sendTransportRef.current,
       getDevice: () => deviceRef.current,
     }),
@@ -270,7 +274,7 @@ export function useMediasoup() {
   // Our outgoing extra microphones (each a separate "mic" producer). Owns the
   // captures + the start/stop/restart serialization; reconciled by the effect below.
   const extraMicsRef = useRef(
-    new ExtraMicController(sharedAudioContext, store, emit, {
+    new ExtraMicController(getSharedAudioContext, store, emit, {
       getSendTransport: () => sendTransportRef.current,
       getDevice: () => deviceRef.current,
       getMode: () => modeRef.current,
@@ -394,8 +398,11 @@ export function useMediasoup() {
 
   // All incoming audio plays through the shared context, so the speaker pick
   // is one setSinkId there — it covers every peer, current and future.
+  // Don't force the (iOS-lazy) context into existence just to clear a sink that
+  // was never set — it must be created after the mic opens (shared-context.ts).
   useEffect(() => {
-    applySpeakerToContext(sharedAudioContext, speakerDeviceId);
+    if (!speakerDeviceId && !hasSharedAudioContext()) return;
+    applySpeakerToContext(getSharedAudioContext(), speakerDeviceId);
   }, [speakerDeviceId]);
 
   // Mid-call mic setting change: re-acquire the mic with the selected device
@@ -1066,7 +1073,7 @@ export function useMediasoup() {
             ts: joinTs,
             kind: "join",
           });
-          playCue(sharedAudioContext, "join");
+          playCue(getSharedAudioContext(), "join");
           // In P2P mode, the new peer will send us an offer — we wait for it
         },
       );
@@ -1098,7 +1105,7 @@ export function useMediasoup() {
             kind: "leave",
           });
         }
-        playCue(sharedAudioContext, "leave");
+        playCue(getSharedAudioContext(), "leave");
       });
 
       // --- Vote to kick (public rooms) ---
@@ -1170,7 +1177,7 @@ export function useMediasoup() {
                 ? announce_caster_removed({ name })
                 : announce_peer_kicked({ name }),
             );
-          playCue(sharedAudioContext, "leave");
+          playCue(getSharedAudioContext(), "leave");
         },
       );
 
@@ -1179,7 +1186,7 @@ export function useMediasoup() {
       socket.on("you-were-kicked", () => {
         store.getState().setKicked(true);
         store.getState().announceEvent(announce_you_were_kicked());
-        playCue(sharedAudioContext, "leave");
+        playCue(getSharedAudioContext(), "leave");
         socket.disconnect();
       });
 
@@ -1377,7 +1384,7 @@ export function useMediasoup() {
                 ? announce_screen_started({ name })
                 : announce_share_started({ name }),
             );
-          playCue(sharedAudioContext, "share-start");
+          playCue(getSharedAudioContext(), "share-start");
         },
       );
 
@@ -1396,7 +1403,7 @@ export function useMediasoup() {
                 ? announce_screen_stopped({ name })
                 : announce_share_stopped({ name }),
             );
-          playCue(sharedAudioContext, "share-stop");
+          playCue(getSharedAudioContext(), "share-stop");
         },
       );
 
@@ -1404,7 +1411,7 @@ export function useMediasoup() {
       // stereo "file" stream arrives separately via new-producer.
       socket.on("file-stream-started", ({ displayName: name }: { displayName: string }) => {
         store.getState().announceEvent(announce_file_stream_started({ name }));
-        playCue(sharedAudioContext, "share-start");
+        playCue(getSharedAudioContext(), "share-start");
       });
 
       // A peer stopped their file stream — tear down their file "music stream"
@@ -1414,7 +1421,7 @@ export function useMediasoup() {
         ({ peerId, displayName: name }: { peerId: string; displayName: string }) => {
           registry.removeFilesOwnedBy(peerId);
           store.getState().announceEvent(announce_file_stream_stopped({ name }));
-          playCue(sharedAudioContext, "share-stop");
+          playCue(getSharedAudioContext(), "share-stop");
         },
       );
 
@@ -1450,7 +1457,7 @@ export function useMediasoup() {
             // Share/file: close the producer + stop local playback in place.
             stopOwnStreamLocalRef.current(source);
             store.getState().announceEvent(announce_your_stream_stopped());
-            playCue(sharedAudioContext, "share-stop");
+            playCue(getSharedAudioContext(), "share-stop");
             return;
           }
           if (source === "share") {
@@ -1461,7 +1468,7 @@ export function useMediasoup() {
           else registry.removeMicStream(producerId);
           const name = store.getState().peers.get(ownerId)?.displayName ?? announce_a_participant();
           store.getState().announceEvent(announce_peer_stream_stopped({ name }));
-          playCue(sharedAudioContext, "share-stop");
+          playCue(getSharedAudioContext(), "share-stop");
         },
       );
 
@@ -1500,7 +1507,7 @@ export function useMediasoup() {
         "video-started",
         ({ displayName: name }: { peerId: string; displayName: string }) => {
           store.getState().announceEvent(announce_video_on({ name }));
-          playCue(sharedAudioContext, "video-on");
+          playCue(getSharedAudioContext(), "video-on");
         },
       );
       socket.on(
@@ -1508,7 +1515,7 @@ export function useMediasoup() {
         ({ peerId, displayName: name }: { peerId: string; displayName: string }) => {
           videoRef.current?.removeOwnedBy(peerId, "camera");
           store.getState().announceEvent(announce_video_off({ name }));
-          playCue(sharedAudioContext, "video-off");
+          playCue(getSharedAudioContext(), "video-off");
         },
       );
 
@@ -1517,7 +1524,7 @@ export function useMediasoup() {
       // separately via new-producer.
       socket.on("mic-stream-started", ({ displayName: name }: { displayName: string }) => {
         store.getState().announceEvent(announce_extra_mic_started({ name }));
-        playCue(sharedAudioContext, "share-start");
+        playCue(getSharedAudioContext(), "share-start");
       });
 
       // A peer stopped one extra mic — tear down that specific tile (addressed by
@@ -1538,7 +1545,7 @@ export function useMediasoup() {
           registry.removeMicStream(producerId);
           if (last) {
             store.getState().announceEvent(announce_extra_mic_stopped({ name }));
-            playCue(sharedAudioContext, "share-stop");
+            playCue(getSharedAudioContext(), "share-stop");
           }
         },
       );
@@ -1589,7 +1596,7 @@ export function useMediasoup() {
     // Coalesced so mashing mute doesn't spam the chat log + cue (see surfaceToggle).
     surfaceToggle("mic", true, () => {
       store.getState().announceEvent(announce_mic_muted());
-      playCue(sharedAudioContext, "mute");
+      playCue(getSharedAudioContext(), "mute");
     });
   }, [emit, store, surfaceToggle]);
 
@@ -1604,7 +1611,7 @@ export function useMediasoup() {
     store.getState().setMuted(false);
     surfaceToggle("mic", false, () => {
       store.getState().announceEvent(announce_mic_unmuted());
-      playCue(sharedAudioContext, "unmute");
+      playCue(getSharedAudioContext(), "unmute");
     });
   }, [emit, store, surfaceToggle]);
 
@@ -1663,7 +1670,7 @@ export function useMediasoup() {
       .announceEvent(
         store.getState().roomIsVideo ? announce_screen_stopped_you() : announce_share_stopped_you(),
       );
-    playCue(sharedAudioContext, "share-stop");
+    playCue(getSharedAudioContext(), "share-stop");
   }, [store, graph, emit]);
 
   const startAudioShare = useCallback(async () => {
@@ -1740,7 +1747,7 @@ export function useMediasoup() {
       .announceEvent(
         store.getState().roomIsVideo ? announce_screen_started_you() : announce_share_started_you(),
       );
-    playCue(sharedAudioContext, "share-start");
+    playCue(getSharedAudioContext(), "share-start");
   }, [store, graph, stopAudioShare, emit]);
 
   const toggleAudioShare = useCallback(async () => {
@@ -1783,7 +1790,7 @@ export function useMediasoup() {
       // pin) and close the server-side producer so peers' tiles disappear.
       await emit("stop-file-stream").catch(() => {});
       store.getState().announceEvent(announcement ?? announce_file_stream_stopped_you());
-      playCue(sharedAudioContext, "share-stop");
+      playCue(getSharedAudioContext(), "share-stop");
     },
     [store, teardownFileLocal, emit],
   );
@@ -1805,7 +1812,7 @@ export function useMediasoup() {
   const startFileSource = useCallback(
     async (src: string, name: string, objectUrl?: string) => {
       graph.ensure();
-      resumeContext(sharedAudioContext);
+      resumeContext(getSharedAudioContext());
 
       const firstStart = store.getState().fileStreamName == null;
 
@@ -1864,7 +1871,7 @@ export function useMediasoup() {
         await emit("start-file-stream").catch(() => {});
         if (wasSfu) await graph.produceFile();
         store.getState().announceEvent(announce_file_stream_started_you());
-        playCue(sharedAudioContext, "share-start");
+        playCue(getSharedAudioContext(), "share-start");
       } else {
         // Replacing the file mid-stream — producer/SFU pin are unchanged, but the
         // persisted producer still carries the OLD file's title, so push the new
@@ -2021,7 +2028,7 @@ export function useMediasoup() {
       const trimmed = text.trim();
       if (!trimmed) return { ok: false, reason: "empty" };
       if (!chatLimiterRef.current.tryConsume()) {
-        playCue(sharedAudioContext, "thunk");
+        playCue(getSharedAudioContext(), "thunk");
         return { ok: false, reason: "rate_limited" };
       }
       try {
@@ -2029,7 +2036,7 @@ export function useMediasoup() {
         return { ok: true };
       } catch {
         // Server rejected (its budget was also spent via the API, or transient).
-        playCue(sharedAudioContext, "thunk");
+        playCue(getSharedAudioContext(), "thunk");
         return { ok: false, reason: "rate_limited" };
       }
     },
@@ -2095,7 +2102,7 @@ export function useMediasoup() {
   const voteKick = useCallback(
     (targetId: string, vote: boolean) => {
       emit("vote-kick", { targetId, vote }).catch(() => {
-        playCue(sharedAudioContext, "thunk");
+        playCue(getSharedAudioContext(), "thunk");
       });
     },
     [emit],
@@ -2109,7 +2116,7 @@ export function useMediasoup() {
   const kickCaster = useCallback(
     (targetId: string) => {
       emit("kick-caster", { targetId }).catch(() => {
-        playCue(sharedAudioContext, "thunk");
+        playCue(getSharedAudioContext(), "thunk");
       });
     },
     [emit],
@@ -2122,7 +2129,7 @@ export function useMediasoup() {
   const stopPeerStream = useCallback(
     (producerId: string) => {
       emit("stop-peer-stream", { producerId }).catch(() => {
-        playCue(sharedAudioContext, "thunk");
+        playCue(getSharedAudioContext(), "thunk");
       });
     },
     [emit],
@@ -2157,7 +2164,7 @@ export function useMediasoup() {
   const someoneKnocking = useRoomStore((s) => s.joinRequests.length > 0);
   useEffect(() => {
     if (!someoneKnocking) return;
-    return startKnockLoop(sharedAudioContext);
+    return startKnockLoop(getSharedAudioContext());
   }, [someoneKnocking]);
 
   useEffect(() => {

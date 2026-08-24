@@ -102,12 +102,22 @@ export class PeerAudioRegistry {
   // by join from the snapshot; flipped by applyDuck.
   private voiceActive = false;
 
+  // The context is taken as a getter so it can be created lazily (iOS creates
+  // it only once the mic is open — see shared-context.ts); a plain context is
+  // accepted too, for tests.
+  private readonly getCtx: () => AudioContext;
+  private get ctx(): AudioContext {
+    return this.getCtx();
+  }
+
   constructor(
-    private readonly ctx: AudioContext,
+    ctx: AudioContext | (() => AudioContext),
     private readonly store: typeof useRoomStore,
     private readonly emit: Emit,
     private readonly deps: SfuConsumeDeps,
-  ) {}
+  ) {
+    this.getCtx = typeof ctx === "function" ? ctx : () => ctx;
+  }
 
   get isVoiceActive(): boolean {
     return this.voiceActive;
@@ -134,7 +144,12 @@ export class PeerAudioRegistry {
     // iOS Safari requires webkit attributes
     (audioEl as unknown as Record<string, boolean>).playsInline = true;
     (audioEl as unknown as Record<string, string>).webkitPlaysinline = "true";
-    // Mute the HTML element — audio is routed through the shared AudioContext
+    // Mute the HTML element — audio is routed through the shared AudioContext.
+    // `muted`, not just `volume = 0`: iOS ignores `volume` on media elements
+    // (it's under hardware control), so the element would play the peer at full
+    // level in parallel with the Web Audio path — two copies a few ms apart,
+    // i.e. the "phased" sound iOS users reported.
+    audioEl.muted = true;
     audioEl.volume = 0;
 
     resumeContext(this.ctx);

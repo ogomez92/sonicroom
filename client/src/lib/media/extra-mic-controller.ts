@@ -64,12 +64,22 @@ export class ExtraMicController {
   // Baseline of the last reconciled selection, diffed against the desired set.
   private prevDesired = new Map<string, boolean>();
 
+  // The context is taken as a getter so it can be created lazily (iOS creates
+  // it only once the mic is open — see shared-context.ts); a plain context is
+  // accepted too, for tests.
+  private readonly getCtx: () => AudioContext;
+  private get ctx(): AudioContext {
+    return this.getCtx();
+  }
+
   constructor(
-    private readonly ctx: AudioContext,
+    ctx: AudioContext | (() => AudioContext),
     private readonly store: typeof useRoomStore,
     private readonly emit: Emit,
     private readonly deps: ExtraMicDeps,
-  ) {}
+  ) {
+    this.getCtx = typeof ctx === "function" ? ctx : () => ctx;
+  }
 
   // A failed op never wedges the chain (failures surface to the caller's promise,
   // then are swallowed for the next link). Mirrors useMediasoup's runTransition.

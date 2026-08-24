@@ -7,7 +7,7 @@
 // hint ref) are passed in.
 import type { Socket } from "socket.io-client";
 import { useRoomStore } from "../../stores/room";
-import { sharedAudioContext } from "../audio/shared-context";
+import { getSharedAudioContext } from "../audio/shared-context";
 import { playCue } from "../sounds";
 import { formatMessage, META_SEP, type ChatMessage } from "../chat";
 import {
@@ -104,7 +104,7 @@ export function registerMuteHandlers(socket: Socket, surfaceToggle: SurfaceToggl
     surfaceToggle(`peer:${peerId}`, true, () => {
       const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
       store.getState().announce(announce_peer_muted({ name }));
-      playCue(sharedAudioContext, "peer-mute");
+      playCue(getSharedAudioContext(), "peer-mute");
     });
   });
 
@@ -113,7 +113,7 @@ export function registerMuteHandlers(socket: Socket, surfaceToggle: SurfaceToggl
     surfaceToggle(`peer:${peerId}`, false, () => {
       const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
       store.getState().announce(announce_peer_unmuted({ name }));
-      playCue(sharedAudioContext, "peer-unmute");
+      playCue(getSharedAudioContext(), "peer-unmute");
     });
   });
 }
@@ -132,6 +132,6 @@ export function registerChatHandlers(socket: Socket, chatHintGiven: { current: b
       announcement += `${META_SEP}${announce_chat_hint()}`;
     }
     store.getState().announceChat(announcement);
-    playCue(sharedAudioContext, "message");
+    playCue(getSharedAudioContext(), "message");
   });
 }

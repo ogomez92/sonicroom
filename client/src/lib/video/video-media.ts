@@ -10,7 +10,7 @@
 import type { Device } from "mediasoup-client";
 import type { Transport, Producer, Consumer } from "mediasoup-client/types";
 import { useRoomStore } from "../../stores/room";
-import { sharedAudioContext } from "../audio/shared-context";
+import { getSharedAudioContext } from "../audio/shared-context";
 import { playCue } from "../sounds";
 import {
   announce_a_participant,
@@ -110,7 +110,7 @@ export class VideoMedia {
     } catch (err) {
       console.warn("[video] camera unavailable:", err);
       this.store.getState().announceEvent(announce_video_failed());
-      playCue(sharedAudioContext, "thunk");
+      playCue(getSharedAudioContext(), "thunk");
       return;
     }
     this.cameraStream = stream;
@@ -122,7 +122,7 @@ export class VideoMedia {
     await this.emit("start-video", {}).catch(() => {});
     await this.produceCamera();
     this.store.getState().announceEvent(announce_video_on_you());
-    playCue(sharedAudioContext, "video-on");
+    playCue(getSharedAudioContext(), "video-on");
   }
 
   // Produce the camera track (SFU-only; idempotent). Called from startCamera and
@@ -153,7 +153,7 @@ export class VideoMedia {
     this.store.getState().bumpLocalVideo();
     await this.emit("stop-video", {}).catch(() => {});
     this.store.getState().announceEvent(announce_video_off_you());
-    playCue(sharedAudioContext, "video-off");
+    playCue(getSharedAudioContext(), "video-off");
   }
 
   async toggleCamera(): Promise<void> {
@@ -344,12 +344,12 @@ export class VideoMedia {
     const stream = isSelf ? this.cameraStream : this.streamForPeer(peerId, source);
     if (!stream) {
       s.announce(describe_no_stream());
-      playCue(sharedAudioContext, "thunk");
+      playCue(getSharedAudioContext(), "thunk");
       return;
     }
     if (!s.claudeApiKey.trim()) {
       s.announce(describe_no_key());
-      playCue(sharedAudioContext, "thunk");
+      playCue(getSharedAudioContext(), "thunk");
       return;
     }
     const name = isSelf ? "" : (s.peers.get(peerId)?.displayName ?? announce_a_participant());
@@ -374,7 +374,7 @@ export class VideoMedia {
         );
     } catch (err) {
       this.store.getState().announce(describeErrorMessage(err));
-      playCue(sharedAudioContext, "thunk");
+      playCue(getSharedAudioContext(), "thunk");
     } finally {
       this.describing = false;
     }

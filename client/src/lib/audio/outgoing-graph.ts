@@ -51,11 +51,21 @@ export class OutgoingAudioGraph {
   private fileMonitorGain: GainNode | null = null;
   private fileProducer: Producer | null = null;
 
+  // The context is taken as a getter so it can be created lazily (iOS creates
+  // it only once the mic is open — see shared-context.ts); a plain context is
+  // accepted too, for tests.
+  private readonly getCtx: () => AudioContext;
+  private get ctx(): AudioContext {
+    return this.getCtx();
+  }
+
   constructor(
-    private readonly ctx: AudioContext,
+    ctx: AudioContext | (() => AudioContext),
     private readonly store: typeof useRoomStore,
     private readonly deps: SfuProduceDeps,
-  ) {}
+  ) {
+    this.getCtx = typeof ctx === "function" ? ctx : () => ctx;
+  }
 
   // Build mic → micGain → limiter → outDest once; reused for the whole session.
   ensure() {
