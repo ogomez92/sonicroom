@@ -32,24 +32,15 @@ declare global {
 
 // Mirrors client/src/lib/runtime-config.ts so "Reset to defaults" matches what the
 // client would use when no override is set.
+//
+// STUN-only on purpose: TURN credentials are no longer baked into any client.
+// Leaving this list empty of TURN entries makes the client fall through to the
+// server-side credential minter (https://turn.gomsen.com/ice), which hands out a
+// short-lived credential per session. Only fill in TURN entries here when
+// pointing the app at a *different* instance that has its own relay.
 const DEFAULT_ICE_SERVERS: IceServer[] = [
   { urls: "stun:turn.gomsen.com:3478" },
   { urls: "stun:stun.l.google.com:19302" },
-  {
-    urls: "turn:turn.gomsen.com:3478?transport=udp",
-    username: "gamesturn",
-    credential: "sin6V0gFokHz78gM0GDfXmat",
-  },
-  {
-    urls: "turn:turn.gomsen.com:3478?transport=tcp",
-    username: "gamesturn",
-    credential: "sin6V0gFokHz78gM0GDfXmat",
-  },
-  {
-    urls: "turns:turn.gomsen.com:5349?transport=tcp",
-    username: "gamesturn",
-    credential: "sin6V0gFokHz78gM0GDfXmat",
-  },
 ];
 
 interface StreamConfig {

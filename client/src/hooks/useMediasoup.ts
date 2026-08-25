@@ -76,9 +76,11 @@ import {
 } from "../lib/audio/shared-context";
 import type { VideoMedia, VideoSource } from "../lib/video/video-media";
 
-// ICE servers (with optional per-instance overrides) live in runtime-config.ts —
-// `iceServers()` returns the default coturn list on the web and whatever the
-// Electron client injects when pointed at another instance.
+// ICE servers (with optional per-instance overrides) live in runtime-config.ts.
+// `iceServers()` is async: it mints a short-lived TURN credential from the
+// server-side minter (no TURN password is baked into this bundle), falls back to
+// STUN-only if that fails, and returns whatever the Electron client injects when
+// pointed at another instance.
 
 // The shared AudioContext + its keep-alive + the gain-ramp time-constant live in
 // lib/audio/shared-context.ts (imported above); the per-peer gain math + ducking
@@ -495,7 +497,7 @@ export function useMediasoup() {
       if (localStream) connectMicToGraph(localStream);
 
       const pc = new RTCPeerConnection({
-        iceServers: iceServers(),
+        iceServers: await iceServers(),
       });
 
       // Send the processed outgoing track (mic gain + limiter, + shared audio),
@@ -641,7 +643,7 @@ export function useMediasoup() {
       );
       const sendTransport = device.createSendTransport({
         ...(sendRes.params as Parameters<typeof device.createSendTransport>[0]),
-        iceServers: iceServers(),
+        iceServers: await iceServers(),
       });
 
       sendTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {
@@ -679,7 +681,7 @@ export function useMediasoup() {
       );
       const recvTransport = device.createRecvTransport({
         ...(recvRes.params as Parameters<typeof device.createRecvTransport>[0]),
-        iceServers: iceServers(),
+        iceServers: await iceServers(),
       });
 
       recvTransport.on("connect", async ({ dtlsParameters }, callback, errback) => {

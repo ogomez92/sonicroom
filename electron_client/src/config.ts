@@ -40,6 +40,17 @@ function configPath(): string {
   return path.join(app.getPath("userData"), "config.json");
 }
 
+// TURN used to be a single static username/password baked into every client.
+// That credential is retired (coturn now issues short-lived ones), so any copy
+// still sitting in a user's config.json is dead weight that would *override* the
+// credential minter and silently break their relay fallback. Drop those entries
+// on load so old installs heal themselves on next launch.
+const RETIRED_TURN_USERNAME = "gamesturn";
+
+function isRetiredTurnEntry(server: IceServer): boolean {
+  return server.username === RETIRED_TURN_USERNAME;
+}
+
 function coerceIceServers(value: unknown): IceServer[] {
   if (!Array.isArray(value)) return [];
   const out: IceServer[] = [];
@@ -53,6 +64,7 @@ function coerceIceServers(value: unknown): IceServer[] {
     const server: IceServer = { urls: urls as string | string[] };
     if (typeof e.username === "string" && e.username) server.username = e.username;
     if (typeof e.credential === "string" && e.credential) server.credential = e.credential;
+    if (isRetiredTurnEntry(server)) continue;
     out.push(server);
   }
   return out;

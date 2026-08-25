@@ -4,7 +4,9 @@ import {
   apiUrl,
   socketTarget,
   iceServers,
+  resetIceCache,
   DEFAULT_ICE_SERVERS,
+  STUN_ONLY_ICE_SERVERS,
 } from "./runtime-config";
 import type { SonicRoomConfig } from "./branding";
 
@@ -86,39 +88,81 @@ describe("socketTarget", () => {
 });
 
 describe("iceServers", () => {
-  it("returns the baked-in defaults with no override", () => {
-    expect(iceServers()).toBe(DEFAULT_ICE_SERVERS);
+  // The minter is a network call; stub it per test so nothing hits the wire.
+  function stubFetch(impl: typeof fetch) {
+    globalThis.fetch = impl as typeof fetch;
+  }
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    resetIceCache();
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    resetIceCache();
   });
 
-  it("returns the defaults for an empty-array override", () => {
-    setConfig({ iceServers: [] });
-    expect(iceServers()).toBe(DEFAULT_ICE_SERVERS);
-  });
-
-  it("returns the defaults for a non-array override", () => {
-    setConfig({ iceServers: "nope" as unknown as RTCIceServer[] });
-    expect(iceServers()).toBe(DEFAULT_ICE_SERVERS);
-  });
-
-  it("returns the injected list when a non-empty array is provided", () => {
+  it("returns the injected list when a non-empty array is provided", async () => {
     const custom: RTCIceServer[] = [{ urls: "stun:stun.other.example:3478" }];
     setConfig({ iceServers: custom });
-    expect(iceServers()).toBe(custom);
+    await expect(iceServers()).resolves.toBe(custom);
   });
 
-  it("ships the expected default STUN/TURN entries", () => {
+  it("mints TURN credentials when there is no override", async () => {
+    const minted: RTCIceServer[] = [
+      { urls: "stun:turn.gomsen.com:3478" },
+      { urls: "turn:turn.gomsen.com:3478?transport=udp", username: "1:web", credential: "sig" },
+    ];
+    stubFetch(
+      (async () =>
+        new Response(
+          JSON.stringify({ iceServers: minted, expiresAt: Date.now() / 1000 + 3600 }),
+          { status: 200 },
+        )) as typeof fetch,
+    );
+    await expect(iceServers()).resolves.toEqual(minted);
+  });
+
+  it("caches the minted credential across calls", async () => {
+    let calls = 0;
+    stubFetch(
+      (async () => {
+        calls += 1;
+        return new Response(
+          JSON.stringify({
+            iceServers: [{ urls: "turn:x", username: "u", credential: "c" }],
+            expiresAt: Date.now() / 1000 + 3600,
+          }),
+          { status: 200 },
+        );
+      }) as typeof fetch,
+    );
+    await Promise.all([iceServers(), iceServers()]);
+    await iceServers();
+    expect(calls).toBe(1);
+  });
+
+  it("falls back to STUN-only when the minter fails", async () => {
+    stubFetch((async () => new Response("nope", { status: 500 })) as typeof fetch);
+    await expect(iceServers()).resolves.toBe(STUN_ONLY_ICE_SERVERS);
+  });
+
+  it("falls back to STUN-only when the minter is unreachable", async () => {
+    stubFetch((async () => {
+      throw new Error("offline");
+    }) as typeof fetch);
+    await expect(iceServers()).resolves.toBe(STUN_ONLY_ICE_SERVERS);
+  });
+
+  it("ships no TURN credentials in the static defaults", () => {
     const urls = DEFAULT_ICE_SERVERS.map((s) => s.urls);
     expect(urls).toContain("stun:turn.gomsen.com:3478");
     expect(urls).toContain("stun:stun.l.google.com:19302");
-    expect(urls).toContain("turn:turn.gomsen.com:3478?transport=udp");
-    expect(urls).toContain("turn:turn.gomsen.com:3478?transport=tcp");
-    expect(urls).toContain("turns:turn.gomsen.com:5349?transport=tcp");
-    // The TURN (not STUN) entries carry credentials.
+    // The whole point: nothing baked into the bundle carries a TURN secret.
     for (const s of DEFAULT_ICE_SERVERS) {
-      if (String(s.urls).startsWith("turn")) {
-        expect(s.username).toBe("gamesturn");
-        expect(s.credential).toBeTruthy();
-      }
+      expect(String(s.urls).startsWith("stun:")).toBe(true);
+      expect(s.username).toBeUndefined();
+      expect(s.credential).toBeUndefined();
     }
   });
 });
