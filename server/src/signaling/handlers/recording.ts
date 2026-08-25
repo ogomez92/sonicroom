@@ -24,14 +24,17 @@ export function registerRecordingHandlers(ctx: ConnectionContext) {
       const producers: ProducerInfo[] = [];
       for (const [peerId, peer] of room.peers) {
         for (const [producerId, producer] of peer.producers) {
-          // Audio only — the recorder is an Opus pipeline (video rooms' camera/
-          // screen producers are never captured).
-          if (producer.kind !== "audio") continue;
+          // Audio always; picture too, but only in a video room — where the
+          // download renders each person's camera with their own voice as an
+          // MP4. An audio room has no video producers at all, so this stays a
+          // pure Opus pipeline there.
+          if (producer.kind !== "audio" && !room.isVideo) continue;
           producers.push({
             producerId,
             peerId,
             label: peer.displayName,
             source: (producer.appData?.source as string) ?? "voice",
+            kind: producer.kind === "video" ? "video" : "audio",
           });
         }
       }

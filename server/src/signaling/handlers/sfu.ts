@@ -121,15 +121,17 @@ export function registerSfuHandlers(ctx: ConnectionContext) {
       // If the room is being recorded and/or streamed, tap this producer for
       // each too. Not awaited — the produce callback should return promptly,
       // and the recorder/feed spins up in the background. Recording and
-      // streaming each consume the producer independently. Audio only: the
-      // recorder/mixer are Opus pipelines, so video producers are never tapped.
+      // streaming each consume the producer independently. Recording takes
+      // picture as well in a video room (the download renders it as MP4);
+      // Icecast streaming stays audio-only everywhere — it's an Opus/MP3 feed.
       const producerInfo: ProducerInfo = {
         producerId: producer.id,
         peerId: socket.id,
         label: currentPeer.displayName,
         source: source ?? "voice",
+        kind: producer.kind === "video" ? "video" : "audio",
       };
-      if (producer.kind === "audio" && recordingManager.isRecording(currentRoom.name)) {
+      if (recordingManager.isRecording(currentRoom.name)) {
         void recordingManager
           .addProducer(currentRoom.name, producerInfo)
           .catch((err) => console.error("[recording] addProducer failed:", err));

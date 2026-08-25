@@ -4,6 +4,9 @@ import { EventEmitter } from "node:events";
 import type { RtpParameters, RtpCapabilities } from "mediasoup/types";
 import {
   RecordingManager,
+  isVideoTrack,
+  type PaddedEntry,
+  type PaddedTrack,
   type RecordingDeps,
   type SpawnedProcess,
   type RecordingRouter,
@@ -50,14 +53,41 @@ const RTP: RtpParameters = {
   rtcp: {},
 } as unknown as RtpParameters;
 
+// VIDEO ROOMS ONLY: what mediasoup hands back when the consumed producer is a
+// camera/screen track.
+const VIDEO_RTP: RtpParameters = {
+  codecs: [
+    {
+      mimeType: "video/VP8",
+      payloadType: 96,
+      clockRate: 90000,
+      parameters: {},
+      rtcpFeedback: [],
+    },
+  ],
+  encodings: [{ ssrc: 222 }],
+  headerExtensions: [],
+  rtcp: {},
+} as unknown as RtpParameters;
+
 class FakeConsumer implements RtpConsumer {
-  kind = "audio";
-  rtpParameters = RTP;
+  kind: string;
+  rtpParameters: RtpParameters;
   closed = false;
   resumed = false;
-  constructor(public id: string) {}
+  keyFramesRequested = 0;
+  constructor(
+    public id: string,
+    isVideo = false,
+  ) {
+    this.kind = isVideo ? "video" : "audio";
+    this.rtpParameters = isVideo ? VIDEO_RTP : RTP;
+  }
   async resume() {
     this.resumed = true;
+  }
+  async requestKeyFrame() {
+    this.keyFramesRequested++;
   }
   close() {
     this.closed = true;
@@ -68,12 +98,18 @@ class FakeTransport implements RtpPlainTransport {
   closed = false;
   connected?: { ip: string; port: number };
   consumer?: FakeConsumer;
-  constructor(public id: string) {}
+  constructor(
+    public id: string,
+    private readonly videoProducers: Set<string> = new Set(),
+  ) {}
   async connect(params: { ip: string; port: number }) {
     this.connected = params;
   }
   async consume(params: { producerId: string }) {
-    this.consumer = new FakeConsumer(`consumer-${params.producerId}`);
+    this.consumer = new FakeConsumer(
+      `consumer-${params.producerId}`,
+      this.videoProducers.has(params.producerId),
+    );
     return this.consumer;
   }
   close() {
@@ -84,8 +120,10 @@ class FakeTransport implements RtpPlainTransport {
 class FakeRouter implements RecordingRouter {
   rtpCapabilities = { codecs: [], headerExtensions: [] } as unknown as RtpCapabilities;
   transports: FakeTransport[] = [];
+  // producer ids the room considers picture (video rooms only)
+  videoProducers = new Set<string>();
   async createPlainTransport() {
-    const t = new FakeTransport(`transport-${this.transports.length}`);
+    const t = new FakeTransport(`transport-${this.transports.length}`, this.videoProducers);
     this.transports.push(t);
     return t;
   }
@@ -177,6 +215,15 @@ const PRODUCERS = [
   { producerId: "p1", peerId: "alice" },
   { producerId: "p2", peerId: "bob" },
 ];
+
+// Every fixture in this file records AUDIO producers, so the per-track entries
+// must all come out in the plain Ogg shape — narrowing here also asserts that
+// an audio room never grows a video entry.
+function audioTracks(entries: PaddedEntry[]): PaddedTrack[] {
+  const audio = entries.filter((e): e is PaddedTrack => !isVideoTrack(e));
+  assert.equal(audio.length, entries.length, "an audio recording produced a video entry");
+  return audio;
+}
 
 describe("RecordingManager.start", () => {
   let h: Harness;
@@ -369,7 +416,7 @@ describe("RecordingManager.getPaddedTracks / spawnPaddedTrack", () => {
     await h.manager.addProducer("room1", { producerId: "p2", peerId: "bob", label: "Bob" });
 
     h.clock.t = 11000; // downloading 10s into a still-running recording
-    const tracks = h.manager.getPaddedTracks("room1");
+    const tracks = audioTracks(h.manager.getPaddedTracks("room1"));
     assert.equal(tracks.length, 2);
     // delay = offset from the recording start; total = full span so far (now)
     assert.deepEqual(
@@ -387,14 +434,14 @@ describe("RecordingManager.getPaddedTracks / spawnPaddedTrack", () => {
     h.clock.t = 30000;
     await h.manager.finalize("room1"); // stopped 29s in
     h.clock.t = 999999; // long after — must not grow the span
-    const tracks = h.manager.getPaddedTracks("room1");
+    const tracks = audioTracks(h.manager.getPaddedTracks("room1"));
     assert.equal(tracks[0].totalMs, 29000);
   });
 
   it("skips header-only/missing captures like the raw track list", async () => {
     const rec = await h.manager.start("room1", h.router, PRODUCERS);
     h.headerOnlyFiles.add(`${rec.dir}/bob__p2.ogg`);
-    const tracks = h.manager.getPaddedTracks("room1");
+    const tracks = audioTracks(h.manager.getPaddedTracks("room1"));
     assert.equal(tracks.length, 1);
     assert.ok(tracks[0].path.includes("alice__p1"));
   });
@@ -485,8 +532,10 @@ describe("RecordingManager.mix", () => {
   it("can mix a finished recording after stop, by recording id", async () => {
     const rec = await h.manager.start("room1", h.router, PRODUCERS);
     await h.manager.finalize("room1");
-    const proc = h.manager.mixByRecordingId(rec.id) as FakeProcess;
-    assert.ok(proc, "finished recording is still downloadable");
+    const mix = h.manager.mixByRecordingId(rec.id);
+    assert.ok(mix, "finished recording is still downloadable");
+    assert.equal(mix.container, "ogg");
+    const proc = mix.proc as FakeProcess;
     assert.deepEqual(proc.args.slice(-2), ["ogg", "pipe:1"]);
   });
 });
@@ -596,5 +645,223 @@ describe("RecordingManager.discard", () => {
     assert.equal(h.manager.isRecording("room1"), false);
     assert.equal(h.manager.isRecording("room2"), false);
     assert.equal(h.ports.size, 0);
+  });
+});
+
+// --- Video rooms ----------------------------------------------------------
+// A recording only ever captures picture in a video room. Every suite above
+// records audio producers and asserts the Ogg behaviour is untouched; these
+// cover what a video room adds on top.
+
+describe("RecordingManager (video room) — capture", () => {
+  let h: Harness;
+  beforeEach(() => {
+    h = makeHarness();
+    h.router.videoProducers.add("cam1");
+  });
+
+  it("captures a camera to WebM from a video SDP, and asks for a keyframe", async () => {
+    const rec = await h.manager.start("room1", h.router, [
+      { producerId: "v1", peerId: "alice", label: "Alice", source: "voice" },
+      { producerId: "cam1", peerId: "alice", label: "Alice", source: "camera", kind: "video" },
+    ]);
+
+    const camSdp = h.writes.find((w) => w.file.includes("cam1"))!;
+    assert.ok(camSdp.data.includes("m=video"), camSdp.data);
+    assert.ok(camSdp.data.includes("a=rtpmap:96 VP8/90000"));
+
+    const camFfmpeg = h.spawned.find((p) => p.args.some((a) => a.endsWith("cam1.webm")))!;
+    assert.ok(camFfmpeg, "a picture capture writes .webm");
+    assert.ok(camFfmpeg.args.includes("-c:v"));
+
+    // the voice capture is untouched — still a copied Ogg
+    const voiceFfmpeg = h.spawned.find((p) => p.args.some((a) => a.endsWith("v1.ogg")))!;
+    assert.ok(voiceFfmpeg.args.includes("-c:a"));
+
+    // keyframe requested for the picture only, so the capture opens decodable
+    const consumers = h.router.transports.map((t) => t.consumer!);
+    const cam = consumers.find((c) => c.kind === "video")!;
+    const voice = consumers.find((c) => c.kind === "audio")!;
+    assert.equal(cam.keyFramesRequested, 1);
+    assert.equal(voice.keyFramesRequested, 0);
+    assert.equal(rec.status, "recording");
+  });
+
+  it("never feeds a picture capture to the Opus mixer inputs", async () => {
+    await h.manager.start("room1", h.router, [
+      { producerId: "v1", peerId: "alice", source: "voice" },
+      { producerId: "cam1", peerId: "alice", source: "camera", kind: "video" },
+    ]);
+    const inputs = h.manager.getMixInputs("room1");
+    assert.equal(inputs.length, 1);
+    assert.ok(inputs[0].path.endsWith("v1.ogg"));
+  });
+});
+
+describe("RecordingManager (video room) — per-track download", () => {
+  let h: Harness;
+  beforeEach(() => {
+    h = makeHarness();
+    h.router.videoProducers.add("cam1");
+    h.router.videoProducers.add("scr1");
+  });
+
+  it("hands a peer one MP4 entry carrying their picture and their own voice", async () => {
+    h.clock.t = 1000;
+    const rec = await h.manager.start("room1", h.router, [
+      { producerId: "v1", peerId: "alice", label: "Alice", source: "voice" },
+      { producerId: "v2", peerId: "bob", label: "Bob", source: "voice" },
+    ]);
+    h.clock.t = 6000; // Alice turns her camera on 5s in
+    await h.manager.addProducer("room1", {
+      producerId: "cam1",
+      peerId: "alice",
+      label: "Alice",
+      source: "camera",
+      kind: "video",
+    });
+    h.clock.t = 21000; // downloading 20s in
+
+    const tracks = h.manager.getPaddedTracks("room1");
+    assert.deepEqual(
+      tracks.map((t) => t.name),
+      ["01-Alice.mp4", "02-Bob.ogg"],
+    );
+
+    const alice = tracks[0];
+    assert.ok(isVideoTrack(alice));
+    assert.equal(alice.totalMs, 20000);
+    assert.ok(alice.video.path.startsWith(rec.dir));
+    assert.ok(alice.video.path.endsWith("cam1.webm"));
+    assert.equal(alice.video.delayMs, 5000); // black for the 5s before it came on
+    assert.ok(alice.audio!.path.endsWith("v1.ogg"));
+    assert.equal(alice.audio!.delayMs, 0); // her voice was there from the start
+
+    // Bob, who never turned his camera on, is still a plain audio track
+    assert.ok(!isVideoTrack(tracks[1]));
+  });
+
+  it("renders a video entry with libx264 + the peer's audio, aligned to the span", async () => {
+    h.clock.t = 1000;
+    await h.manager.start("room1", h.router, [
+      { producerId: "v1", peerId: "alice", label: "Alice", source: "voice" },
+    ]);
+    h.clock.t = 5000;
+    await h.manager.addProducer("room1", {
+      producerId: "cam1",
+      peerId: "alice",
+      label: "Alice",
+      source: "camera",
+      kind: "video",
+    });
+    h.clock.t = 31000;
+
+    const tracks = h.manager.getPaddedTracks("room1");
+    const before = h.spawned.length;
+    h.manager.spawnPaddedTrack(tracks[0]);
+    assert.equal(h.spawned.length, before + 1);
+    const proc = h.spawned[h.spawned.length - 1];
+    assert.ok(proc.args.includes("libx264"));
+    assert.ok(proc.args.includes("aac"));
+    assert.equal(proc.args[proc.args.indexOf("-t") + 1], "30.000");
+    const filter = proc.args[proc.args.indexOf("-filter_complex") + 1];
+    assert.ok(filter.includes("tpad=start_duration=4.000"));
+    assert.deepEqual(proc.args.slice(-2), ["mp4", "pipe:1"]);
+  });
+
+  it("pairs a screen share's picture with the share's audio, not the voice", async () => {
+    await h.manager.start("room1", h.router, [
+      { producerId: "v1", peerId: "alice", label: "Alice", source: "voice" },
+      { producerId: "sh1", peerId: "alice", label: "Alice", source: "share" },
+      { producerId: "scr1", peerId: "alice", label: "Alice", source: "screen", kind: "video" },
+    ]);
+    const tracks = h.manager.getPaddedTracks("room1");
+    assert.deepEqual(
+      tracks.map((t) => t.name),
+      ["01-Alice.ogg", "02-Alice-screen.mp4"],
+    );
+    const screen = tracks[1];
+    assert.ok(isVideoTrack(screen));
+    assert.ok(screen.audio!.path.endsWith("sh1.ogg"));
+  });
+
+  it("falls back to a plain audio track when the picture captured nothing", async () => {
+    const rec = await h.manager.start("room1", h.router, [
+      { producerId: "v1", peerId: "alice", label: "Alice", source: "voice" },
+      { producerId: "cam1", peerId: "alice", label: "Alice", source: "camera", kind: "video" },
+      { producerId: "scr1", peerId: "bob", label: "Bob", source: "screen", kind: "video" },
+    ]);
+    // Alice's camera producer never sent a frame — a header-only WebM
+    h.headerOnlyFiles.add(`${rec.dir}/alice__cam1.webm`);
+    const tracks = h.manager.getPaddedTracks("room1");
+    assert.deepEqual(
+      tracks.map((t) => t.name),
+      ["01-Alice.ogg", "02-Bob-screen.mp4"],
+    );
+    assert.ok(!isVideoTrack(tracks[0]), "a dead capture must not produce an unopenable MP4");
+  });
+});
+
+describe("RecordingManager (video room) — whole-call download", () => {
+  let h: Harness;
+  beforeEach(() => {
+    h = makeHarness();
+    h.router.videoProducers.add("cam1");
+    h.router.videoProducers.add("cam2");
+  });
+
+  it("mixes every picture into a grid with the room's audio on top", async () => {
+    h.clock.t = 1000;
+    const rec = await h.manager.start("room1", h.router, [
+      { producerId: "v1", peerId: "alice", source: "voice" },
+      { producerId: "v2", peerId: "bob", source: "voice" },
+      { producerId: "cam1", peerId: "alice", source: "camera", kind: "video" },
+    ]);
+    h.clock.t = 4000;
+    await h.manager.addProducer("room1", {
+      producerId: "cam2",
+      peerId: "bob",
+      source: "camera",
+      kind: "video",
+    });
+    h.clock.t = 11000;
+
+    const mix = h.manager.mixByRecordingId(rec.id);
+    assert.ok(mix);
+    assert.equal(mix.container, "mp4");
+    assert.equal(mix.contentType, "video/mp4");
+    const proc = mix.proc as FakeProcess;
+    const filter = proc.args[proc.args.indexOf("-filter_complex") + 1];
+    // two cameras side by side, both voices mixed under them
+    assert.ok(filter.includes("color=c=black:s=1280x360"));
+    assert.ok(filter.includes("overlay=x=640:y=0"));
+    assert.ok(filter.includes("amix=inputs=2:normalize=0[aout]"));
+    // Bob's camera came on 3s in
+    assert.ok(filter.includes("tpad=start_duration=3.000"));
+    assert.equal(proc.args[proc.args.indexOf("-t") + 1], "10.000");
+    assert.deepEqual(proc.args.slice(-2), ["mp4", "pipe:1"]);
+  });
+
+  it("stays Ogg when the video room's recording caught no picture", async () => {
+    const rec = await h.manager.start("room1", h.router, [
+      { producerId: "v1", peerId: "alice", source: "voice" },
+    ]);
+    const mix = h.manager.mixByRecordingId(rec.id);
+    assert.ok(mix);
+    assert.equal(mix.container, "ogg");
+    assert.deepEqual((mix.proc as FakeProcess).args.slice(-2), ["ogg", "pipe:1"]);
+  });
+
+  it("still renders the grid when nobody's sound was captured", async () => {
+    const rec = await h.manager.start("room1", h.router, [
+      { producerId: "cam1", peerId: "alice", source: "camera", kind: "video" },
+    ]);
+    const mix = h.manager.mixByRecordingId(rec.id);
+    assert.ok(mix);
+    assert.equal(mix.container, "mp4");
+    const filter = (mix.proc as FakeProcess).args[
+      (mix.proc as FakeProcess).args.indexOf("-filter_complex") + 1
+    ];
+    assert.ok(filter.includes("anullsrc"));
   });
 });

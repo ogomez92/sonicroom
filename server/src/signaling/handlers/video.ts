@@ -10,7 +10,7 @@ import type { ConnectionContext } from "../context.js";
 // one share, two producers. Both are rejected outright by the produce handler
 // unless room.isVideo. ---
 export function registerVideoHandlers(ctx: ConnectionContext) {
-  const { socket, session } = ctx;
+  const { socket, recordingManager, session } = ctx;
 
   socket.on("start-video", (_data: unknown, cb?: (res: unknown) => void) => {
     if (!session.currentRoom || !session.currentPeer)
@@ -32,6 +32,13 @@ export function registerVideoHandlers(ctx: ConnectionContext) {
       if ((producer.appData?.source as string) === "camera") {
         producer.close();
         currentPeer.producers.delete(id);
+        // Stop its capture too if the room is being recorded — otherwise the
+        // recorder idles on a dead port until the recording ends. The picture
+        // captured so far is kept and still appears in the download, exactly
+        // like a stopped audio share (see stop-share).
+        if (recordingManager.isRecording(currentRoom.name)) {
+          void recordingManager.removeProducer(currentRoom.name, id).catch(() => {});
+        }
       }
     }
     socket.to(currentRoom.name).emit("video-stopped", {

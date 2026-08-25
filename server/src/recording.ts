@@ -12,9 +12,16 @@ import {
   buildCaptureArgs,
   buildMixArgs,
   buildPadArgs,
+  buildTrackMp4Args,
+  buildVideoMixArgs,
+  captureExtension,
   computeDelayMs,
+  pairTracks,
   trackFileName,
   type MixInput,
+  type RecorderMeta,
+  type TrackKind,
+  type TrackSource,
 } from "./recording-util.js";
 
 // A capture that received no RTP — a muted/silent producer, or one whose peer
@@ -51,6 +58,10 @@ export interface RtpConsumer {
   rtpParameters: RtpParameters;
   resume(): Promise<void>;
   close(): void;
+  // Video only. mediasoup asks the producer for a fresh keyframe so the capture
+  // starts on a decodable frame instead of waiting out the producer's own
+  // keyframe interval (which would cost seconds of black at the head).
+  requestKeyFrame?(): Promise<void>;
 }
 
 export interface RtpPlainTransport {
@@ -104,6 +115,9 @@ export interface ProducerInfo {
   // name even after the peer is gone.
   label?: string;
   source?: string;
+  // VIDEO ROOMS ONLY (source "camera" / "screen"). Defaults to "audio", so
+  // every audio-room caller is unchanged.
+  kind?: TrackKind;
 }
 
 interface ProducerRecorder {
@@ -111,6 +125,7 @@ interface ProducerRecorder {
   peerId: string;
   label?: string;
   source?: string;
+  kind: TrackKind;
   port: number;
   filePath: string;
   startedAt: number;
@@ -133,6 +148,34 @@ export interface TrackFile {
 export interface PaddedTrack extends TrackFile {
   delayMs: number;
   totalMs: number;
+}
+
+// VIDEO ROOMS ONLY: a per-track entry that carries picture, rendered as an MP4
+// (see buildTrackMp4Args) instead of an Ogg. `audio` is the sound muxed onto it
+// — the peer's voice under their camera, the share's audio under their screen —
+// and is absent only for a genuinely silent picture.
+export interface PaddedVideoTrack {
+  name: string;
+  totalMs: number;
+  video: TrackSource;
+  audio?: TrackSource;
+}
+
+// One entry of the per-track download. Audio rooms only ever produce the first.
+export type PaddedEntry = PaddedTrack | PaddedVideoTrack;
+
+export function isVideoTrack(entry: PaddedEntry): entry is PaddedVideoTrack {
+  return "video" in entry;
+}
+
+// The container the whole-call download comes out in. Ogg/Opus for an audio
+// room (unchanged); MP4 once a recording captured any picture.
+export type MixContainer = "ogg" | "mp4";
+
+export interface MixResult {
+  proc: SpawnedProcess;
+  container: MixContainer;
+  contentType: string;
 }
 
 export type RecordingStatus = "recording" | "finished";
@@ -302,19 +345,52 @@ export class RecordingManager {
     );
   }
 
-  // Current per-producer files with their start offsets, for mixing. Includes
-  // producers that already left — their captured audio is still part of the mix.
+  // Current per-producer SOUND files with their start offsets, for mixing.
+  // Includes producers that already left — their captured audio is still part
+  // of the mix. Picture captures (video rooms) are excluded: they go through
+  // the video mixer instead.
   getMixInputs(roomName: string): MixInput[] {
     const rec = this.recordings.get(roomName);
     if (!rec) return [];
-    return this.allRecorders(rec).map((r) => ({
-      path: r.filePath,
-      delayMs: computeDelayMs(rec.startedAt, r.startedAt),
-    }));
+    return this.allRecorders(rec)
+      .filter((r) => r.kind === "audio")
+      .map((r) => ({
+        path: r.filePath,
+        delayMs: computeDelayMs(rec.startedAt, r.startedAt),
+      }));
+  }
+
+  // Did this recording capture any picture? False for every audio room, which
+  // is what keeps the audio-only download paths below exactly as they were.
+  private hasVideo(rec: RoomRecording): boolean {
+    return this.allRecorders(rec).some((r) => r.kind === "video");
+  }
+
+  // Recorders whose capture file actually holds media, as the pure pairing
+  // helper wants them. Header-only/missing captures are dropped here (see
+  // MIN_CAPTURE_BYTES) so a camera that never sent a frame degrades the entry
+  // to plain audio instead of producing an MP4 ffmpeg can't open.
+  private usableRecorderMeta(rec: RoomRecording): RecorderMeta[] {
+    return this.allRecorders(rec)
+      .filter((r) => this.deps.fileSize(r.filePath) >= MIN_CAPTURE_BYTES)
+      .map((r) => ({
+        peerId: r.peerId,
+        label: r.label,
+        source: r.source,
+        kind: r.kind,
+        path: r.filePath,
+        delayMs: computeDelayMs(rec.startedAt, r.startedAt),
+      }));
+  }
+
+  // Full span of a recording: start → stop, or → now while still running.
+  private spanMs(rec: RoomRecording): number {
+    return Math.max(0, (rec.finishedAt ?? this.deps.now()) - rec.startedAt);
   }
 
   // Per-track files (live + already-left producers) with friendly, unique names
-  // for the "download every track on its own" zip. Header-only/missing captures
+  // for the "download every track on its own" zip (trackFileName reads each
+  // recorder's kind, so a picture capture is listed as .mp4). Header-only/missing captures
   // (a silent producer, or a recorder that failed to start) are skipped so the
   // zip has no dead entries — see MIN_CAPTURE_BYTES.
   getTrackFiles(roomName: string): TrackFile[] {
@@ -339,10 +415,28 @@ export class RecordingManager {
   // shared total length (recording start → finish, or → now while still
   // recording) — so the per-track zip unpacks to equal-length, time-aligned
   // files that drop straight into a DAW. Same MIN_CAPTURE_BYTES filtering.
-  getPaddedTracks(roomName: string): PaddedTrack[] {
+  getPaddedTracks(roomName: string): PaddedEntry[] {
     const rec = this.recordings.get(roomName);
     if (!rec) return [];
-    const totalMs = Math.max(0, (rec.finishedAt ?? this.deps.now()) - rec.startedAt);
+    const totalMs = this.spanMs(rec);
+
+    // VIDEO ROOMS ONLY. Once anything captured picture, each person's camera is
+    // folded together with their own voice (and their screen with the share's
+    // audio) into one MP4 entry — see pairTracks. Everything else in the room
+    // still comes out as its own audio file.
+    if (this.hasVideo(rec)) {
+      return pairTracks(this.usableRecorderMeta(rec)).map((entry) =>
+        entry.video
+          ? { name: entry.name, totalMs, video: entry.video, audio: entry.audio }
+          : {
+              name: entry.name,
+              path: entry.audio!.path,
+              delayMs: entry.audio!.delayMs,
+              totalMs,
+            },
+      );
+    }
+
     return this.allRecorders(rec)
       .map((r, i) => ({
         path: r.filePath,
@@ -355,7 +449,7 @@ export class RecordingManager {
 
   // Same as getPaddedTracks(), addressed by the recording id the download URL
   // carries. Works for active and finished recordings.
-  paddedTracksByRecordingId(recordingId: string): PaddedTrack[] | null {
+  paddedTracksByRecordingId(recordingId: string): PaddedEntry[] | null {
     for (const [roomName, rec] of this.recordings) {
       if (rec.id === recordingId) return this.getPaddedTracks(roomName);
     }
@@ -363,10 +457,15 @@ export class RecordingManager {
   }
 
   // Spawn a one-shot ffmpeg that streams one padded, time-aligned track to its
-  // stdout (Ogg/Opus). Used per entry by the per-track zip download; the source
-  // capture file is read but never modified, so live captures are unaffected.
-  spawnPaddedTrack(track: PaddedTrack): SpawnedProcess {
-    return this.deps.spawn(this.deps.ffmpegPath, buildPadArgs(track));
+  // stdout — Ogg/Opus for a sound track, MP4 (picture + that person's own
+  // sound) for a video-room track that has picture. Used per entry by the
+  // per-track zip download; the source capture files are read but never
+  // modified, so live captures are unaffected.
+  spawnPaddedTrack(track: PaddedEntry): SpawnedProcess {
+    const args = isVideoTrack(track)
+      ? buildTrackMp4Args({ video: track.video, audio: track.audio, totalMs: track.totalMs })
+      : buildPadArgs(track);
+    return this.deps.spawn(this.deps.ffmpegPath, args);
   }
 
   // Spawn a one-shot ffmpeg that mixes the current capture files into a single
@@ -377,6 +476,8 @@ export class RecordingManager {
   // mix, so one silent stream must not be able to zero out the whole download.
   // Returns null if there's nothing with audio to mix.
   mix(roomName: string): SpawnedProcess | null {
+    const rec = this.recordings.get(roomName);
+    if (rec && this.hasVideo(rec)) return this.mixVideo(rec, roomName)?.proc ?? null;
     const inputs = this.getMixInputs(roomName).filter(
       (i) => this.deps.fileSize(i.path) >= MIN_CAPTURE_BYTES,
     );
@@ -386,11 +487,39 @@ export class RecordingManager {
     return this.deps.spawn(this.deps.ffmpegPath, args);
   }
 
+  // VIDEO ROOMS ONLY. Whole-call MP4: every camera/screen laid out in a grid
+  // over black, with the room's whole audio mix on top. Returns null if nothing
+  // usable was captured.
+  private mixVideo(rec: RoomRecording, roomName: string): MixResult | null {
+    const usable = this.usableRecorderMeta(rec);
+    const video: TrackSource[] = usable
+      .filter((r) => r.kind === "video")
+      .map((r) => ({ path: r.path, delayMs: r.delayMs }));
+    const audio: TrackSource[] = usable
+      .filter((r) => r.kind === "audio")
+      .map((r) => ({ path: r.path, delayMs: r.delayMs }));
+    if (video.length === 0) return null;
+    const args = buildVideoMixArgs({ video, audio, totalMs: this.spanMs(rec) });
+    this.deps.log(
+      `mixing ${video.length} picture(s) + ${audio.length} sound track(s) to MP4 for room "${roomName}"`,
+    );
+    return {
+      proc: this.deps.spawn(this.deps.ffmpegPath, args),
+      container: "mp4",
+      contentType: "video/mp4",
+    };
+  }
+
   // Same as mix(), but addressed by the (hard-to-guess) recording id, which is
-  // what the download URL carries. Works for active and finished recordings.
-  mixByRecordingId(recordingId: string): SpawnedProcess | null {
+  // what the download URL carries, and reporting the container it produced so
+  // the HTTP layer can label the download. Works for active and finished
+  // recordings.
+  mixByRecordingId(recordingId: string): MixResult | null {
     for (const [roomName, rec] of this.recordings) {
-      if (rec.id === recordingId) return this.mix(roomName);
+      if (rec.id !== recordingId) continue;
+      if (this.hasVideo(rec)) return this.mixVideo(rec, roomName);
+      const proc = this.mix(roomName);
+      return proc ? { proc, container: "ogg", contentType: "audio/ogg" } : null;
     }
     return null;
   }
@@ -471,13 +600,14 @@ export class RecordingManager {
         paused: true,
       });
 
+      const kind: TrackKind = info.kind ?? "audio";
       const sdp = buildSdp(sdpParamsFromRtp(consumer.rtpParameters, port));
       const base = `${safeId(info.peerId)}__${safeId(info.producerId)}`;
       const sdpPath = path.join(rec.dir, `${base}.sdp`);
-      const filePath = path.join(rec.dir, `${base}.ogg`);
+      const filePath = path.join(rec.dir, `${base}.${captureExtension(kind)}`);
       await deps.writeFile(sdpPath, sdp);
 
-      ffmpeg = deps.spawn(deps.ffmpegPath, buildCaptureArgs(sdpPath, filePath));
+      ffmpeg = deps.spawn(deps.ffmpegPath, buildCaptureArgs(sdpPath, filePath, kind));
       const captured = ffmpeg;
       ffmpeg.stderr?.on("data", (d: Buffer) => {
         const line = d.toString().trim();
@@ -494,12 +624,18 @@ export class RecordingManager {
         throw new Error("recording closed during recorder startup");
       }
       await consumer.resume();
+      // Picture only: ask for a keyframe now so the capture opens on a
+      // decodable frame instead of black until the encoder's next one.
+      if (kind === "video") {
+        await consumer.requestKeyFrame?.().catch(() => {});
+      }
 
       rec.recorders.set(info.producerId, {
         producerId: info.producerId,
         peerId: info.peerId,
         label: info.label,
         source: info.source,
+        kind,
         port,
         filePath,
         startedAt: deps.now(),

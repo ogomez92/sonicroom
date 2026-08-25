@@ -9,7 +9,13 @@ import { LOCALE_NAMES, type Locale } from "../i18n";
 
 export type DescribeSubject = "self" | "camera" | "screen";
 
-export type DescribeErrorCode = "no_key" | "no_frame" | "auth" | "rate_limited" | "network" | "other";
+export type DescribeErrorCode =
+  | "no_key"
+  | "no_frame"
+  | "auth"
+  | "rate_limited"
+  | "network"
+  | "other";
 
 export class DescribeError extends Error {
   constructor(

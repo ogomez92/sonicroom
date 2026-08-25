@@ -58,6 +58,10 @@ export function AudioControls({
   const isStreamingFile = useRoomStore((s) => s.fileStreamName != null);
   const duckingEnabled = useRoomStore((s) => s.duckingEnabled);
   const isRecording = useRoomStore((s) => s.isRecording);
+  // A video room's recording downloads as an MP4 (every camera/screen in a grid
+  // with the room's audio on top); an audio room stays Ogg/Opus. Only the
+  // suggested file name is picked here — the server sets the real one.
+  const roomIsVideo = useRoomStore((s) => s.roomIsVideo);
   const recordingId = useRoomStore((s) => s.recordingId);
   const isStreaming = useRoomStore((s) => s.isStreaming);
   // Shared notes: whether the feature is configured on this instance (gates the
@@ -294,7 +298,7 @@ export function AudioControls({
           <a
             {...item("download")}
             href={apiUrl(`/api/recordings/${encodeURIComponent(recordingId)}/download`)}
-            download={`sonicroom-${recordingId}.ogg`}
+            download={`sonicroom-${recordingId}.${roomIsVideo ? "mp4" : "ogg"}`}
             className="flex h-11 items-center gap-2 rounded-full bg-sonic-700 px-4 text-sonic-200 transition-all hover:bg-sonic-600"
             aria-label={m.controls_download_recording()}
             title={isRecording ? m.controls_download_active_title() : m.controls_download_title()}

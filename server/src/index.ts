@@ -236,17 +236,24 @@ async function main() {
   });
 
   // Recording download — mixes all participants' captured audio into a single
-  // Ogg/Opus file and streams it. Works at any time while recording continues;
-  // the capture processes are never interrupted. Keyed by the recording id
-  // (a capability token handed to clients), not the room name.
+  // Ogg/Opus file and streams it. In a VIDEO room, where the recording also
+  // captured picture, it streams an MP4 instead: everyone's camera/screen in a
+  // grid with that same audio mix on top. Works at any time while recording
+  // continues; the capture processes are never interrupted. Keyed by the
+  // recording id (a capability token handed to clients), not the room name.
   app.get("/api/recordings/:id/download", (req, res) => {
-    const proc = recordingManager.mixByRecordingId(req.params.id);
-    if (!proc || !proc.stdout) {
+    const mix = recordingManager.mixByRecordingId(req.params.id);
+    if (!mix || !mix.proc.stdout) {
       res.status(404).json({ error: "No active recording with that id, or nothing captured yet" });
       return;
     }
-    res.setHeader("Content-Type", "audio/ogg");
-    res.setHeader("Content-Disposition", `attachment; filename="sonicroom-${req.params.id}.ogg"`);
+    const { container, contentType } = mix;
+    const proc = mix.proc as SpawnedProcess & { stdout: NodeJS.ReadableStream };
+    res.setHeader("Content-Type", contentType);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="sonicroom-${req.params.id}.${container}"`,
+    );
 
     proc.stderr?.on("data", (d: Buffer) => console.error(`[mix] ${d.toString().trim()}`));
     proc.stdout.pipe(res);
@@ -266,7 +273,9 @@ async function main() {
   });
 
   // Per-track download — packs each participant's captured audio into its own
-  // file inside one streamed .zip (no mixing). Each track is padded to the full
+  // file inside one streamed .zip (no mixing). In a VIDEO room a participant's
+  // entry is instead an MP4 of their picture with their own voice on it (and
+  // their screen share with the share's audio) — see pairTracks. Each track is padded to the full
   // recording span: leading silence equal to its start offset + trailing
   // silence to a shared length, so the unzipped files are all the same length
   // and aligned on the same time boundaries (drop them straight into a DAW).
