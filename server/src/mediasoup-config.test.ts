@@ -4,6 +4,8 @@ import {
   announcedAddresses,
   buildListenInfos,
   localInterfaceAddresses,
+  resolveWorkerCount,
+  MAX_WORKERS,
 } from "./mediasoup-config.js";
 
 const noInterfaces = () => ({});
@@ -92,5 +94,47 @@ describe("localInterfaceAddresses", () => {
     });
     assert.deepEqual(localInterfaceAddresses("IPv4", interfaces), ["192.168.1.50"]);
     assert.deepEqual(localInterfaceAddresses("IPv6", interfaces), ["2001:db8::9"]);
+  });
+});
+
+describe("resolveWorkerCount", () => {
+  it("defaults to one worker per core when MEDIASOUP_WORKERS is unset", () => {
+    assert.deepEqual(resolveWorkerCount({}, 8), { count: 8, warning: null });
+  });
+
+  it("treats an empty or whitespace-only value as unset", () => {
+    assert.equal(resolveWorkerCount({ MEDIASOUP_WORKERS: "" }, 4).count, 4);
+    assert.equal(resolveWorkerCount({ MEDIASOUP_WORKERS: "   " }, 4).count, 4);
+  });
+
+  it("never drops below one worker, even if the host reports no cores", () => {
+    assert.equal(resolveWorkerCount({}, 0).count, 1);
+  });
+
+  it("honours an explicit count below the core count", () => {
+    assert.deepEqual(resolveWorkerCount({ MEDIASOUP_WORKERS: " 2 " }, 16), {
+      count: 2,
+      warning: null,
+    });
+  });
+
+  it("honours a count above the core count but warns about CPU contention", () => {
+    const { count, warning } = resolveWorkerCount({ MEDIASOUP_WORKERS: "6" }, 2);
+    assert.equal(count, 6);
+    assert.match(String(warning), /exceeds this host's 2 core\(s\)/);
+  });
+
+  it("clamps an absurd value to the cap instead of forking the box to a halt", () => {
+    const { count, warning } = resolveWorkerCount({ MEDIASOUP_WORKERS: "5000" }, 4);
+    assert.equal(count, MAX_WORKERS);
+    assert.match(String(warning), /above the 64-worker cap/);
+  });
+
+  it("ignores junk, zero and fractions, falling back to one per core with a warning", () => {
+    for (const value of ["nope", "0", "-3", "2.5", "1e999"]) {
+      const { count, warning } = resolveWorkerCount({ MEDIASOUP_WORKERS: value }, 4);
+      assert.equal(count, 4, `expected fallback for ${value}`);
+      assert.match(String(warning), /not a positive integer/);
+    }
   });
 });

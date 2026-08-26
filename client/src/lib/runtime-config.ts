@@ -18,7 +18,7 @@ import type { SonicRoomConfig } from "./branding";
 //
 // TURN credentials are NEVER baked into this bundle. Our coturn runs with
 // `use-auth-secret` (the TURN REST API), so the only long-lived secret lives on
-// the server; clients ask the credential minter at `TURN_CREDENTIAL_URL` for a
+// the server; clients ask the credential minter at `turnCredentialUrl()` for a
 // short-lived HMAC credential (username `<expiry>:<label>`) that coturn verifies
 // and that stops working once it expires. See /home/turnauth on the VPS.
 //
@@ -34,9 +34,9 @@ export const STUN_ONLY_ICE_SERVERS: RTCIceServer[] = [
 // Kept for the Electron settings UI, which shows "the defaults" to the user.
 export const DEFAULT_ICE_SERVERS = STUN_ONLY_ICE_SERVERS;
 
-// Where to mint ephemeral TURN credentials. Same host as coturn itself so one
-// DNS name covers the whole relay story.
-const TURN_CREDENTIAL_URL = "https://turn.gomsen.com/ice?app=sonicroom";
+// Where to mint ephemeral TURN credentials, when the host injects no override.
+// Same host as coturn itself so one DNS name covers the whole relay story.
+export const DEFAULT_TURN_CREDENTIAL_URL = "https://turn.gomsen.com/ice?app=sonicroom";
 
 interface MintedIce {
   iceServers: RTCIceServer[];
@@ -57,7 +57,7 @@ function cacheValid(): boolean {
 
 async function mintIceServers(): Promise<MintedIce | null> {
   try {
-    const res = await fetch(TURN_CREDENTIAL_URL, { credentials: "omit" });
+    const res = await fetch(turnCredentialUrl(), { credentials: "omit" });
     if (!res.ok) throw new Error(`minter returned ${res.status}`);
     const body = (await res.json()) as { iceServers?: RTCIceServer[]; expiresAt?: number };
     if (!Array.isArray(body.iceServers) || body.iceServers.length === 0) {
@@ -76,6 +76,15 @@ async function mintIceServers(): Promise<MintedIce | null> {
 
 function config(): SonicRoomConfig {
   return (typeof window !== "undefined" && window.__SONICROOM_CONFIG__) || {};
+}
+
+// The credential minter to ask. Operator-configurable rather than hardcoded: the
+// server injects TURN_CREDENTIAL_URL from its .env into the served index.html
+// (see server/src/index.ts), so pointing an instance at its own minter needs no
+// client rebuild. Absent — the plain web default, `pnpm dev`, and the Electron
+// client (which overrides `iceServers` wholesale instead) — we use ours.
+export function turnCredentialUrl(): string {
+  return config().turnCredentialUrl?.trim() || DEFAULT_TURN_CREDENTIAL_URL;
 }
 
 // Absolute origin of the signaling/API server with any trailing slash removed.

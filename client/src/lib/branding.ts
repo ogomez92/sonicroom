@@ -14,6 +14,11 @@ export interface SonicRoomConfig {
   // the socket.io connection, the REST (`/api`) calls and the WebRTC ICE config.
   serverUrl?: string;
   iceServers?: RTCIceServer[];
+  // Where to mint ephemeral TURN credentials. Set by the server from
+  // TURN_CREDENTIAL_URL in its .env (like `instanceName`), so an operator points
+  // a deployment at their own minter without rebuilding the client. Unset falls
+  // back to `DEFAULT_TURN_CREDENTIAL_URL` in runtime-config.ts.
+  turnCredentialUrl?: string;
   // Prefilled name in the lobby's "Your name" field (Electron settings default).
   defaultDisplayName?: string;
 }

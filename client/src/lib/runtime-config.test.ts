@@ -5,7 +5,9 @@ import {
   socketTarget,
   iceServers,
   resetIceCache,
+  turnCredentialUrl,
   DEFAULT_ICE_SERVERS,
+  DEFAULT_TURN_CREDENTIAL_URL,
   STUN_ONLY_ICE_SERVERS,
 } from "./runtime-config";
 import type { SonicRoomConfig } from "./branding";
@@ -50,6 +52,22 @@ describe("serverBase", () => {
   it("trims surrounding whitespace (then strips trailing slashes)", () => {
     setConfig({ serverUrl: "  https://x.example.com/  " });
     expect(serverBase()).toBe("https://x.example.com");
+  });
+});
+
+describe("turnCredentialUrl", () => {
+  it("is our own minter with no config at all (web default)", () => {
+    expect(turnCredentialUrl()).toBe(DEFAULT_TURN_CREDENTIAL_URL);
+  });
+
+  it("uses an injected URL (operator's TURN_CREDENTIAL_URL)", () => {
+    setConfig({ turnCredentialUrl: "  https://turn.example.com/ice  " });
+    expect(turnCredentialUrl()).toBe("https://turn.example.com/ice");
+  });
+
+  it("falls back to the default for an empty or whitespace-only value", () => {
+    setConfig({ turnCredentialUrl: "   " });
+    expect(turnCredentialUrl()).toBe(DEFAULT_TURN_CREDENTIAL_URL);
   });
 });
 
@@ -106,6 +124,23 @@ describe("iceServers", () => {
     const custom: RTCIceServer[] = [{ urls: "stun:stun.other.example:3478" }];
     setConfig({ iceServers: custom });
     await expect(iceServers()).resolves.toBe(custom);
+  });
+
+  it("asks the injected minter when the host configures one", async () => {
+    setConfig({ turnCredentialUrl: "https://turn.example.com/ice" });
+    let asked = "";
+    stubFetch((async (input: RequestInfo | URL) => {
+      asked = String(input);
+      return new Response(
+        JSON.stringify({
+          iceServers: [{ urls: "turn:x", username: "u", credential: "c" }],
+          expiresAt: Date.now() / 1000 + 3600,
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch);
+    await iceServers();
+    expect(asked).toBe("https://turn.example.com/ice");
   });
 
   it("mints TURN credentials when there is no override", async () => {

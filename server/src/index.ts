@@ -1,3 +1,6 @@
+// MUST stay first: populates process.env from the repo-root .env before any
+// other module is evaluated (several read process.env as they load).
+import "./load-env.js";
 import express from "express";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
@@ -8,7 +11,7 @@ import { createWorker } from "mediasoup";
 import type { Worker } from "mediasoup/types";
 import {
   workerSettings,
-  numWorkers,
+  resolveWorkerCount,
   transportOptions,
   announcedAddresses,
 } from "./mediasoup-config.js";
@@ -32,17 +35,6 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Load local secrets/config from the repo-root .env (NOTY_* notification target,
-// etc.) before anything reads process.env. tsx/Node don't auto-load it, and it's
-// gitignored + hidden from the app UI on purpose; an absent file is fine (the
-// .env-gated features simply stay off). Resolved from this file, not cwd, since
-// `pnpm --filter server start` runs with the server package as cwd.
-try {
-  process.loadEnvFile(path.resolve(__dirname, "../../.env"));
-} catch {
-  /* no .env present — fine */
-}
-
 const PORT = parseInt(process.env.PORT || "3100", 10);
 const AUDIO_LIBRARY_DIR = process.env.AUDIO_LIBRARY_DIR || "/var/lib/sonicroom/media";
 
@@ -52,10 +44,20 @@ const AUDIO_LIBRARY_DIR = process.env.AUDIO_LIBRARY_DIR || "/var/lib/sonicroom/m
 // client is rebranded without a rebuild. Defaults to "SonicRoom".
 const INSTANCE_NAME = process.env.INSTANCE_NAME?.trim() || "SonicRoom";
 
+// Where this instance's clients mint ephemeral TURN credentials (our coturn runs
+// with `use-auth-secret`, so the long-lived secret never leaves the relay host).
+// Injected into the served index.html alongside INSTANCE_NAME, so an operator
+// points a deployment at their own minter with no client rebuild. Unset keeps
+// the client's built-in default (see client/src/lib/runtime-config.ts).
+const TURN_CREDENTIAL_URL = process.env.TURN_CREDENTIAL_URL?.trim() || "";
+
 async function main() {
-  // Create mediasoup workers
+  // Create mediasoup workers — one per core unless MEDIASOUP_WORKERS pins the
+  // count (resolved here, not at module load, so it sees the .env above).
+  const { count: workerCount, warning: workerWarning } = resolveWorkerCount();
+  if (workerWarning) console.warn(workerWarning);
   const workers: Worker[] = [];
-  for (let i = 0; i < numWorkers; i++) {
+  for (let i = 0; i < workerCount; i++) {
     const worker = await createWorker(workerSettings);
     worker.on("died", () => {
       console.error(`Worker ${worker.pid} died, exiting...`);
@@ -345,10 +347,12 @@ async function main() {
   const indexHtmlPath = path.join(clientDist, "index.html");
   app.use(express.static(clientDist, { index: false }));
 
-  // Inject the operator-configurable instance name into the served index.html so
-  // the pre-built static client can be rebranded via INSTANCE_NAME in .env with
-  // no rebuild: an inline config script the client reads before it mounts (see
-  // client/src/lib/branding.ts), plus the static <title>. Read fresh per request
+  // Inject this instance's operator-configurable runtime config into the served
+  // index.html so the pre-built static client picks it up with no rebuild:
+  // INSTANCE_NAME (rebranding — an inline config script the client reads before
+  // it mounts, see client/src/lib/branding.ts, plus the static <title>) and
+  // TURN_CREDENTIAL_URL (the ephemeral-TURN minter to ask, omitted when unset so
+  // the client keeps its built-in default). Read fresh per request
   // (not cached) so a client-only `pnpm build` — which changes the asset hashes
   // referenced in index.html — is picked up on the next load without a restart.
   const renderIndexHtml = (): string | null => {
@@ -361,7 +365,10 @@ async function main() {
     // JS object literal; escape "<" so a name containing "</script>" can't break
     // out of the inline <script>. Injected right after <head> so it runs before
     // the (deferred) app bundle.
-    const configJson = JSON.stringify({ instanceName: INSTANCE_NAME }).replace(/</g, "\\u003c");
+    const configJson = JSON.stringify({
+      instanceName: INSTANCE_NAME,
+      ...(TURN_CREDENTIAL_URL ? { turnCredentialUrl: TURN_CREDENTIAL_URL } : {}),
+    }).replace(/</g, "\\u003c");
     html = html.replace(
       "<head>",
       `<head><script>window.__SONICROOM_CONFIG__=${configJson};</script>`,

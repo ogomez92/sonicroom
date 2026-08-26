@@ -6,15 +6,66 @@ import type {
 } from "mediasoup/types";
 import os from "node:os";
 
-const numCores = os.cpus().length;
-
 export const workerSettings: WorkerSettings = {
   logLevel: "warn",
   rtcMinPort: 40000,
   rtcMaxPort: 40100,
 };
 
-export const numWorkers = Math.max(1, numCores);
+// ---------------------------------------------------------------------------
+// How many mediasoup workers to spawn
+// ---------------------------------------------------------------------------
+//
+// mediasoup handles media in separate C++ worker processes and rooms are spread
+// across them, so "one per core" is the throughput-maximising default and stays
+// the behaviour when nothing is set. It isn't always what an operator wants
+// though: on a box that also runs other things a big core count spawns workers
+// that will never carry a room, and a container CPU quota makes `os.cpus()`
+// lie (it reports the host's cores, not the share we actually get).
+//
+// MEDIASOUP_WORKERS pins the count instead. Anything unparseable or < 1 is
+// ignored (with a warning) rather than failing the boot, and the cap only
+// exists to stop a fat-fingered "160" from forking the box to a halt.
+export const MAX_WORKERS = 64;
+
+export interface WorkerCount {
+  count: number;
+  /** Set when the operator's value was ignored or adjusted — logged at startup. */
+  warning: string | null;
+}
+
+export function resolveWorkerCount(
+  env: NodeJS.ProcessEnv = process.env,
+  cpuCount: number = os.cpus().length,
+): WorkerCount {
+  // os.cpus() can report 0 in some containers, so never go below one worker.
+  const perCore = Math.max(1, cpuCount);
+  const raw = env.MEDIASOUP_WORKERS?.trim();
+  if (!raw) return { count: perCore, warning: null };
+
+  const requested = Number(raw);
+  if (!Number.isInteger(requested) || requested < 1) {
+    return {
+      count: perCore,
+      warning:
+        `MEDIASOUP_WORKERS="${raw}" is not a positive integer — ` +
+        `ignoring it and using ${perCore} (one per core).`,
+    };
+  }
+  if (requested > MAX_WORKERS) {
+    return {
+      count: MAX_WORKERS,
+      warning: `MEDIASOUP_WORKERS=${requested} is above the ${MAX_WORKERS}-worker cap — using ${MAX_WORKERS}.`,
+    };
+  }
+  if (requested > perCore) {
+    return {
+      count: requested,
+      warning: `MEDIASOUP_WORKERS=${requested} exceeds this host's ${perCore} core(s) — workers will contend for CPU.`,
+    };
+  }
+  return { count: requested, warning: null };
+}
 
 export const routerOptions: RouterOptions = {
   mediaCodecs: [
