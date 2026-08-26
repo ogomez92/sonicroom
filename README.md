@@ -121,12 +121,20 @@ Run these on your server, one line at a time.
    pnpm build
    ```
 
-7. **Tell SonicRoom your server's public address.** For people's audio to actually connect, the server has to advertise the public IP address others reach it on. Set it like this (replace the example with your server's real public IP — your host shows it in their dashboard, or run `curl ifconfig.me`):
+7. **Tell SonicRoom what address people reach it on.** For audio to actually connect, the server has to advertise the address others reach it on. Put it in your `.env` (copy `.env.example` first), or export it:
 
    ```bash
-   export ANNOUNCED_IP=203.0.113.10
+   export ANNOUNCED_IP=203.0.113.10   # your server's real public IP: `curl ifconfig.me`
    export NODE_ENV=production
    ```
+
+   **Hosting at home, behind a router?** Announce a **list** — `ANNOUNCED_IP` and `ANNOUNCED_IP6` take comma-separated addresses, and each one becomes its own ICE candidate:
+
+   ```bash
+   export ANNOUNCED_IP=203.0.113.10,192.168.1.50   # public IP + this machine's LAN IP
+   ```
+
+   That extra LAN address is what lets people **on your own network** connect: most home routers don't hairpin NAT, so a laptop on your Wi-Fi cannot reach your server through its public IP. With both announced, LAN peers use the local candidate and everyone else uses the public one. If your LAN IP moves around, set `ANNOUNCE_LOCAL_IPS=true` instead and the server announces its own interface addresses automatically. (Each announced address uses one more UDP port per connection out of the `40000–40100` range, so list what you need, not every address you have.) The startup log prints exactly what it announced.
 
 8. **Start it:**
 
@@ -356,9 +364,9 @@ Only the server has tests (`node:test`, run via `tsx`). They cover both the pure
 
 In production the server runs the signaling **and** serves the built client statically, so a single Node process is all you need.
 
-- A reference setup runs it under systemd as `sonicroom.service` (`ExecStart=/usr/bin/pnpm start`) with `NODE_ENV=production`.
+- A reference setup runs it under systemd as `sonicroom.service` (`ExecStart=/usr/bin/pnpm start`); the sample unit in the repo root carries no settings on purpose — configuration lives in the gitignored `.env`. (Real environment variables win over `.env`, so an `Environment=` line in the unit overrides the file.)
 - **Client-only changes need just `pnpm build`** — `express.static(client/dist)` serves the new bundle on the next page load, with no restart and no dropped calls. **Restart the service only for server-code changes** (the server runs TS live via `tsx`).
-- ICE is **UDP-only** by design; TCP/TLS fallback is delegated to an external coturn. TURN credentials live in client code intentionally (WebRTC requires them browser-side).
+- ICE is **UDP-only** by design; TCP/TLS fallback is delegated to an external coturn. TURN credentials are **not** baked into the bundle — the client fetches short-lived ones from the credential minter at call time, so the long-lived secret stays server-side.
 
 ## Ports
 
@@ -376,14 +384,15 @@ Only the WebRTC media range and the signaling port need to be reachable; the rec
 
 The server loads a gitignored `.env` from the repo root at startup (see `.env.example`). All of these are operator-only and never surfaced in the UI; an absent `.env` simply leaves the optional features off.
 
-| Variable                                  | Purpose                                                                                                                                                         |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `INSTANCE_NAME`                           | Display name of your instance (lobby heading + browser tab). Defaults to `SonicRoom`; change it to rebrand — see [Rename your instance](#rename-your-instance). |
-| `PORT`                                    | HTTP/signaling port (default `3100`).                                                                                                                           |
-| `ANNOUNCED_IP` / `ANNOUNCED_IP6`          | The VPS public IPv4/IPv6 announced to ICE — **required in production** for media to connect.                                                                    |
-| `NODE_ENV`                                | Set to `production` for production runs.                                                                                                                        |
-| `NOTY_ENABLED`                            | `true` to enable off-box notifications for public-room activity.                                                                                                |
-| `NOTY_HOST` / `NOTY_PORT` / `NOTY_SENDER` | Target and identity for the optional "noty" notification daemon.                                                                                                |
+| Variable                                  | Purpose                                                                                                                                                                                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `INSTANCE_NAME`                           | Display name of your instance (lobby heading + browser tab). Defaults to `SonicRoom`; change it to rebrand — see [Rename your instance](#rename-your-instance).                                                                |
+| `PORT`                                    | HTTP/signaling port (default `3100`).                                                                                                                                                                                          |
+| `ANNOUNCED_IP` / `ANNOUNCED_IP6`          | IPv4/IPv6 address(es) announced to ICE — **required in production** for media to connect. Accepts a **comma-separated list** (e.g. `203.0.113.10,192.168.1.50` for a home server: public IP + LAN IP), one ICE candidate each. |
+| `ANNOUNCE_LOCAL_IPS`                      | `true` to also announce this host's own interface addresses (loopback / IPv6 link-local excluded) — for home/LAN instances with a changing LAN IP.                                                                             |
+| `NODE_ENV`                                | Set to `production` for production runs.                                                                                                                                                                                       |
+| `NOTY_ENABLED`                            | `true` to enable off-box notifications for public-room activity.                                                                                                                                                               |
+| `NOTY_HOST` / `NOTY_PORT` / `NOTY_SENDER` | Target and identity for the optional "noty" notification daemon.                                                                                                                                                               |
 
 To get started locally: `cp .env.example .env` and edit as needed (the defaults are a no-op).
 

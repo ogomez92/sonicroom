@@ -115,28 +115,25 @@ describe("iceServers", () => {
     ];
     stubFetch(
       (async () =>
-        new Response(
-          JSON.stringify({ iceServers: minted, expiresAt: Date.now() / 1000 + 3600 }),
-          { status: 200 },
-        )) as typeof fetch,
+        new Response(JSON.stringify({ iceServers: minted, expiresAt: Date.now() / 1000 + 3600 }), {
+          status: 200,
+        })) as typeof fetch,
     );
     await expect(iceServers()).resolves.toEqual(minted);
   });
 
   it("caches the minted credential across calls", async () => {
     let calls = 0;
-    stubFetch(
-      (async () => {
-        calls += 1;
-        return new Response(
-          JSON.stringify({
-            iceServers: [{ urls: "turn:x", username: "u", credential: "c" }],
-            expiresAt: Date.now() / 1000 + 3600,
-          }),
-          { status: 200 },
-        );
-      }) as typeof fetch,
-    );
+    stubFetch((async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({
+          iceServers: [{ urls: "turn:x", username: "u", credential: "c" }],
+          expiresAt: Date.now() / 1000 + 3600,
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch);
     await Promise.all([iceServers(), iceServers()]);
     await iceServers();
     expect(calls).toBe(1);

@@ -1,3 +1,12 @@
+# Sample systemd unit — copy to /etc/systemd/system/sonicroom.service and adjust
+# the paths. Deliberately carries NO configuration: everything the server reads
+# (PORT, ANNOUNCED_IP/ANNOUNCED_IP6, INSTANCE_NAME, ...) lives in the gitignored
+# .env at the repo root, so this file is safe to commit and there is exactly one
+# place to edit. See .env.example.
+#
+# Note: real environment variables win over .env — if you do add Environment=
+# lines here, they override the .env value rather than the other way round.
+
 [Unit]
 Description=SonicRoom audio conferencing server
 After=network.target
@@ -8,12 +17,6 @@ WorkingDirectory=/home/sonicroom
 ExecStart=/usr/bin/pnpm start
 Restart=on-failure
 RestartSec=3
-
-# Set your VPS public IP here
-Environment=PORT=3100
-Environment=ANNOUNCED_IP=217.154.98.41
-Environment=ANNOUNCED_IP6=2001:ba0:208:5400::1
-Environment=NODE_ENV=production
 
 # Hardening
 NoNewPrivileges=true

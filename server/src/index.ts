@@ -6,7 +6,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { createWorker } from "mediasoup";
 import type { Worker } from "mediasoup/types";
-import { workerSettings, numWorkers } from "./mediasoup-config.js";
+import {
+  workerSettings,
+  numWorkers,
+  transportOptions,
+  announcedAddresses,
+} from "./mediasoup-config.js";
 import { setWorkers, getPublicRooms, getRoomInfo } from "./room-manager.js";
 import { roomNameSchema } from "./signaling/schemas.js";
 import { createSignalingServer } from "./signaling.js";
@@ -379,6 +384,19 @@ async function main() {
 
   httpServer.listen(PORT, () => {
     console.log(`SonicRoom server listening on port ${PORT}`);
+    // Announcing the wrong address is the single most common reason media never
+    // connects, so say out loud what ICE will hand out. Several addresses is
+    // normal for a home instance (public + LAN) — see mediasoup-config.ts.
+    const announced = announcedAddresses(transportOptions.listenInfos ?? []);
+    if (announced.length > 0) {
+      console.log(`Announcing ICE candidates on: ${announced.join(", ")}`);
+    } else {
+      console.warn(
+        "No ANNOUNCED_IP/ANNOUNCED_IP6 set — media will only connect from this machine. " +
+          "Set ANNOUNCED_IP (comma-separated for e.g. public IP + LAN IP behind NAT), " +
+          "or ANNOUNCE_LOCAL_IPS=true to announce this host's own addresses.",
+      );
+    }
   });
 
   // Clean up recordings and live streams (ffmpeg processes, temp files) on
