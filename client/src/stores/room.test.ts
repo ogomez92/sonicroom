@@ -15,6 +15,8 @@ const KEYS = {
   micStereo: "sonicroom:micStereoByDevice",
   streamConfig: "sonicroom:streamConfig",
   chatAnnounce: "sonicroom:chatAnnounceMode",
+  videoBackground: "sonicroom:videoBackground",
+  videoBackgroundImage: "sonicroom:videoBackgroundImage",
 };
 
 const CHAT_MESSAGES_MAX = 200;
@@ -841,5 +843,93 @@ describe("reset", () => {
     expect(st.chatAnnounceMode).toBe("tts");
     expect(st.streamConfig).toEqual(customCfg);
     expect(st.locale).toBe("fr");
+  });
+});
+
+describe("video background (lobby-configured, persisted)", () => {
+  // A stand-in for the downscaled JPEG data URL the picker produces.
+  const IMAGE = "data:image/jpeg;base64,AAAA";
+
+  async function freshStore() {
+    vi.resetModules();
+    const mod = await import("./room");
+    return mod.useRoomStore;
+  }
+
+  it("defaults to no background — the raw camera, and no compositor at all", () => {
+    expect(useRoomStore.getState().videoBackground).toBe("none");
+    expect(useRoomStore.getState().videoBackgroundImage).toBe("");
+  });
+
+  it("persists a preset choice", () => {
+    useRoomStore.getState().setVideoBackground("beach");
+    expect(useRoomStore.getState().videoBackground).toBe("beach");
+    expect(localStorage.getItem(KEYS.videoBackground)).toBe("beach");
+  });
+
+  it("refuses 'custom' while no image is stored, keeping none instead", () => {
+    useRoomStore.getState().setVideoBackground("custom");
+    expect(useRoomStore.getState().videoBackground).toBe("none");
+  });
+
+  it("accepts 'custom' once an image is stored", () => {
+    useRoomStore.getState().setVideoBackgroundImage(IMAGE);
+    useRoomStore.getState().setVideoBackground("custom");
+    expect(useRoomStore.getState().videoBackground).toBe("custom");
+    expect(localStorage.getItem(KEYS.videoBackgroundImage)).toBe(IMAGE);
+  });
+
+  it("drops a 'custom' selection when the image is removed, and persists that too", () => {
+    useRoomStore.getState().setVideoBackgroundImage(IMAGE);
+    useRoomStore.getState().setVideoBackground("custom");
+    useRoomStore.getState().setVideoBackgroundImage("");
+    expect(useRoomStore.getState().videoBackground).toBe("none");
+    expect(localStorage.getItem(KEYS.videoBackground)).toBe("none");
+  });
+
+  it("leaves a preset selection alone when the custom image is removed", () => {
+    useRoomStore.getState().setVideoBackgroundImage(IMAGE);
+    useRoomStore.getState().setVideoBackground("mountains");
+    useRoomStore.getState().setVideoBackgroundImage("");
+    expect(useRoomStore.getState().videoBackground).toBe("mountains");
+  });
+
+  it("reports whether the image actually persisted", () => {
+    expect(useRoomStore.getState().setVideoBackgroundImage(IMAGE)).toBe(true);
+    // The test harness installs its own in-memory Storage, so spy on the
+    // instance rather than Storage.prototype.
+    const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+    // Applied in memory for this call even though storage refused it.
+    expect(useRoomStore.getState().setVideoBackgroundImage(IMAGE)).toBe(false);
+    expect(useRoomStore.getState().videoBackgroundImage).toBe(IMAGE);
+    setItem.mockRestore();
+  });
+
+  it("survives reset — it is a preference, not per-room state", () => {
+    useRoomStore.getState().setVideoBackground("studio");
+    useRoomStore.getState().reset();
+    expect(useRoomStore.getState().videoBackground).toBe("studio");
+  });
+
+  describe("loading a stored choice", () => {
+    it("restores a preset", async () => {
+      localStorage.setItem(KEYS.videoBackground, "bookshelves");
+      expect((await freshStore()).getState().videoBackground).toBe("bookshelves");
+    });
+    it("degrades 'custom' to none when the image is gone", async () => {
+      localStorage.setItem(KEYS.videoBackground, "custom");
+      expect((await freshStore()).getState().videoBackground).toBe("none");
+    });
+    it("keeps 'custom' when the image is still there", async () => {
+      localStorage.setItem(KEYS.videoBackground, "custom");
+      localStorage.setItem(KEYS.videoBackgroundImage, IMAGE);
+      expect((await freshStore()).getState().videoBackground).toBe("custom");
+    });
+    it("degrades a preset this build no longer ships", async () => {
+      localStorage.setItem(KEYS.videoBackground, "some-retired-preset");
+      expect((await freshStore()).getState().videoBackground).toBe("none");
+    });
   });
 });

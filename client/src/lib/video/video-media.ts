@@ -17,6 +17,7 @@ import {
   announce_video_on_you,
   announce_video_off_you,
   announce_video_failed,
+  announce_background_unavailable,
   describe_working,
   describe_result_self,
   describe_result_camera,
@@ -29,6 +30,7 @@ import {
   describe_error_generic,
 } from "../../paraglide/messages.js";
 import { captureFrame, describeFrame, DescribeError, type DescribeSubject } from "./describe-video";
+import type { CameraBackgroundFx } from "./background-fx";
 
 export type VideoSource = "camera" | "screen";
 
@@ -68,11 +70,27 @@ const CAMERA_ENCODINGS = [{ maxBitrate: 600_000 }];
 const SCREEN_ENCODINGS = [{ maxBitrate: 1_500_000, maxFramerate: 15 }];
 
 export class VideoMedia {
-  // Outgoing camera: the capture + its producer (null until the SFU is up /
-  // while the camera is off). App-owned (stopTracks:false) so a mode rebuild or
-  // reconnect re-produces the same capture.
+  // Outgoing camera. TWO streams, and the distinction matters:
+  //  - rawCameraStream is the actual getUserMedia capture — the device. Only
+  //    this object owns real hardware, and only stopCamera/teardownAll stop it.
+  //  - cameraStream is what we PRODUCE and preview. With no background it IS
+  //    the raw capture; with one, it's the compositor's canvas track and the
+  //    raw capture never leaves this machine.
+  // Everything downstream (produceCamera, getLocalStream, the self tile, the
+  // face-centering loop, "describe my video") reads cameraStream, so it sees
+  // exactly what the room sees. Both are app-owned (stopTracks:false) so a mode
+  // rebuild or reconnect re-produces the same track.
+  private rawCameraStream: MediaStream | null = null;
   private cameraStream: MediaStream | null = null;
   private cameraProducer: Producer | null = null;
+  // The background compositor, null whenever the background is "none" (the
+  // default) or it couldn't be set up here. Loaded by dynamic import so an
+  // audio room — and a video room with no background — never ships MediaPipe's
+  // segmenter or the model.
+  private backgroundFx: CameraBackgroundFx | null = null;
+  // True only between the getUserMedia call and rawCameraStream being set —
+  // the one window cameraActive can't cover.
+  private starting = false;
   // Outgoing screen video: the display-capture video track (the audio half, if
   // any, lives in OutgoingAudioGraph's share) + its producer.
   private screenTrack: MediaStreamTrack | null = null;
@@ -99,11 +117,22 @@ export class VideoMedia {
     return this.cameraStream;
   }
 
-  // Turn our camera on: acquire, tell the room (so peers announce + chime), and
-  // produce if the SFU is already up (else setupSfu's produceAll does it). A
-  // denied/missing camera is announced, never thrown — nothing else breaks.
+  // Is the camera on, or on its way on? Starting one is no longer instant — a
+  // background has to load a model and warm the compositor up — so "on" is
+  // owned by the RAW capture, which exists for that whole window. Every
+  // start/stop/toggle gates on this so a double-press can't open the device
+  // twice or leave a compositor running with nothing behind it.
+  private get cameraActive(): boolean {
+    return this.rawCameraStream != null;
+  }
+
+  // Turn our camera on: acquire, apply the lobby-chosen background, tell the
+  // room (so peers announce + chime), and produce if the SFU is already up
+  // (else setupSfu's produceAll does it). A denied/missing camera is announced,
+  // never thrown — nothing else breaks.
   async startCamera(): Promise<void> {
-    if (this.cameraStream) return;
+    if (this.cameraActive || this.starting) return;
+    this.starting = true;
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: CAMERA_CONSTRAINTS });
@@ -112,11 +141,27 @@ export class VideoMedia {
       this.store.getState().announceEvent(announce_video_failed());
       playCue(getSharedAudioContext(), "thunk");
       return;
+    } finally {
+      this.starting = false;
     }
-    this.cameraStream = stream;
+    this.rawCameraStream = stream;
     // The OS/browser can end the track (device unplugged, permission revoked,
-    // another app grabbed it) — reflect that as "video off" everywhere.
+    // another app grabbed it) — reflect that as "video off" everywhere. Watched
+    // on the RAW device track: the compositor's canvas track never "ends".
     stream.getVideoTracks()[0]?.addEventListener("ended", () => void this.stopCamera());
+
+    const { output, fx } = await this.applyBackground(stream);
+    // Warming the compositor takes a moment, and the user can turn the camera
+    // back off (or leave the room) inside it. If that happened, closeCamera has
+    // already stopped this capture — don't resurrect it, and don't leak the
+    // compositor that finished building for a camera nobody wants any more.
+    if (this.rawCameraStream !== stream) {
+      fx?.close();
+      return;
+    }
+    this.backgroundFx = fx;
+    this.cameraStream = output;
+
     this.store.getState().setVideoOn(true);
     this.store.getState().bumpLocalVideo();
     await this.emit("start-video", {}).catch(() => {});
@@ -145,10 +190,9 @@ export class VideoMedia {
   // Turn our camera off: close the producer, stop the capture, tell the room
   // (which authoritatively closes the server-side producer + announces).
   async stopCamera(): Promise<void> {
-    if (!this.cameraStream) return;
+    if (!this.cameraActive) return;
     this.closeCameraProducer();
-    this.cameraStream.getTracks().forEach((t) => t.stop());
-    this.cameraStream = null;
+    this.closeCamera();
     this.store.getState().setVideoOn(false);
     this.store.getState().bumpLocalVideo();
     await this.emit("stop-video", {}).catch(() => {});
@@ -157,13 +201,46 @@ export class VideoMedia {
   }
 
   async toggleCamera(): Promise<void> {
-    if (this.cameraStream) await this.stopCamera();
+    if (this.cameraActive) await this.stopCamera();
     else await this.startCamera();
   }
 
   private closeCameraProducer() {
     if (this.cameraProducer && !this.cameraProducer.closed) this.cameraProducer.close();
     this.cameraProducer = null;
+  }
+
+  // Put the lobby-chosen background behind the capture, and return the stream
+  // to produce. "none" (the default) short-circuits before the dynamic import,
+  // so the common path costs nothing at all. Anything that goes wrong — an
+  // unsupported browser, a model that won't load, a blur this browser can't
+  // actually apply — falls back to the raw camera AND says so: silently
+  // sending the real room to everyone is the one outcome we won't accept.
+  private async applyBackground(
+    raw: MediaStream,
+  ): Promise<{ output: MediaStream; fx: CameraBackgroundFx | null }> {
+    const { videoBackground, videoBackgroundImage } = this.store.getState();
+    if (videoBackground === "none") return { output: raw, fx: null };
+    try {
+      const { createCameraBackgroundFx } = await import("./background-fx");
+      const fx = await createCameraBackgroundFx(raw, videoBackground, videoBackgroundImage);
+      if (fx) return { output: fx.stream, fx };
+    } catch (err) {
+      console.warn("[video] background compositor failed:", err);
+    }
+    this.store.getState().announceEvent(announce_background_unavailable());
+    return { output: raw, fx: null };
+  }
+
+  // Tear the capture down in dependency order: the compositor first (it reads
+  // frames from the raw capture and owns only its own canvas track), then the
+  // device itself.
+  private closeCamera() {
+    this.backgroundFx?.close();
+    this.backgroundFx = null;
+    this.rawCameraStream?.getTracks().forEach((t) => t.stop());
+    this.rawCameraStream = null;
+    this.cameraStream = null;
   }
 
   // --- Screen-share video (the video half of the audio share's getDisplayMedia) ---
@@ -320,8 +397,7 @@ export class VideoMedia {
   // Leave: everything, including our own captures.
   teardownAll(): void {
     this.closeProducers();
-    this.cameraStream?.getTracks().forEach((t) => t.stop());
-    this.cameraStream = null;
+    this.closeCamera();
     this.screenTrack?.stop();
     this.screenTrack = null;
     this.cleanupAll();

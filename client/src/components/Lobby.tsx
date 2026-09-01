@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Headphones, ArrowRight, Globe, DoorOpen, Video } from "lucide-react";
 import { MicPreview } from "./MicPreview";
 import { LanguageSelect } from "./LanguageSelect";
+import { BackgroundPicker } from "./BackgroundPicker";
 import { Footer } from "./Footer";
 import { getLocale } from "../lib/i18n";
 import { getInstanceName, getDefaultDisplayName } from "../lib/branding";
@@ -329,6 +330,13 @@ export function Lobby() {
                 </div>
               </div>
             </fieldset>
+
+            {/* The camera background is chosen here, before the call, and only
+                for a video room — the call window deliberately has no switcher.
+                Mounting it under the room-type choice is what makes that read
+                as one decision; it also means the picker's thumbnails are only
+                ever fetched by someone who actually picked "Video call". */}
+            {roomType === "video" && <BackgroundPicker />}
 
             <div>
               <label

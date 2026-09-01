@@ -2,6 +2,11 @@ import { create } from "zustand";
 import type { ChatMessage } from "../lib/chat";
 import { getLocale, setLocale as applyParaglideLocale, type Locale } from "../lib/i18n";
 import { isIOS } from "../lib/microphone";
+import {
+  normalizeBackgroundChoice,
+  DEFAULT_BACKGROUND,
+  type BackgroundChoice,
+} from "../lib/video/backgrounds";
 import { speak } from "../lib/tts";
 
 // Keep the in-memory chat bounded; the server caps history too. Newest last.
@@ -59,6 +64,20 @@ function saveString(key: string, value: string) {
     localStorage.setItem(key, value);
   } catch {
     // Persistence is best-effort; keep the in-memory value regardless.
+  }
+}
+
+// Same, but says whether it stuck. Only the background image needs to know: it
+// is by far the biggest thing we store (a few hundred KB against localStorage's
+// ~5 MB budget), so it's the one value that can realistically hit the quota —
+// and the honest thing to tell the user is "it works now but won't be
+// remembered", not to fail or to stay silent.
+function saveStringChecked(key: string, value: string): boolean {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -183,6 +202,23 @@ function loadVideoGuidance(): boolean {
   } catch {
     return true;
   }
+}
+
+// The camera background, chosen in the LOBBY (see components/BackgroundPicker)
+// and read once at startCamera. A persisted preference like the mic device, so
+// it carries lobby→call and survives reloads. The custom image is stored beside
+// it as a downscaled JPEG data URL — a couple of hundred KB, which is why
+// fileToBackgroundDataUrl caps and re-encodes before it ever gets here.
+const VIDEO_BACKGROUND_KEY = "sonicroom:videoBackground";
+const VIDEO_BACKGROUND_IMAGE_KEY = "sonicroom:videoBackgroundImage";
+
+function loadVideoBackground(customImage: string): BackgroundChoice {
+  // Normalize on the way in: a preset id from an older build, or a "custom"
+  // whose image has since been cleared, degrades to "none" rather than leaving
+  // the compositor with a choice it can't honour.
+  return normalizeBackgroundChoice(loadString(VIDEO_BACKGROUND_KEY), {
+    hasCustomImage: customImage !== "",
+  });
 }
 
 // An incoming camera/screen video tile (video rooms only): one remote producer
@@ -377,6 +413,14 @@ interface RoomState {
   videoGuidanceEnabled: boolean;
   claudeApiKey: string;
 
+  // Camera background (lobby-configured, persisted). videoBackground is the
+  // choice — "none" (the default: the raw camera is produced and the
+  // compositor never even loads), "blur", "custom", or a preset id.
+  // videoBackgroundImage is the user's own image as a data URL, "" when they
+  // haven't picked one. Read at startCamera; the call window has no switcher.
+  videoBackground: BackgroundChoice;
+  videoBackgroundImage: string;
+
   // Peers
   peers: Map<string, PeerState>;
 
@@ -435,6 +479,9 @@ interface RoomState {
   clearVideoTiles: () => void;
   bumpLocalVideo: () => void;
   setVideoGuidanceEnabled: (enabled: boolean) => void;
+  setVideoBackground: (choice: BackgroundChoice) => void;
+  // Returns false when the image was applied but couldn't be persisted.
+  setVideoBackgroundImage: (dataUrl: string) => boolean;
   setClaudeApiKey: (key: string) => void;
   setPeerVideo: (peerId: string, hasVideo: boolean) => void;
   setPeerScreen: (peerId: string, hasScreen: boolean) => void;
@@ -508,6 +555,8 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   localVideoSeq: 0,
   videoGuidanceEnabled: loadVideoGuidance(),
   claudeApiKey: loadString(CLAUDE_API_KEY_KEY),
+  videoBackgroundImage: loadString(VIDEO_BACKGROUND_IMAGE_KEY),
+  videoBackground: loadVideoBackground(loadString(VIDEO_BACKGROUND_IMAGE_KEY)),
   peers: new Map(),
   speakerBadges: {},
   messages: [],
@@ -619,6 +668,29 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   setClaudeApiKey: (claudeApiKey) => {
     saveString(CLAUDE_API_KEY_KEY, claudeApiKey);
     set({ claudeApiKey });
+  },
+  setVideoBackground: (choice) =>
+    set((s) => {
+      const videoBackground = normalizeBackgroundChoice(choice, {
+        hasCustomImage: s.videoBackgroundImage !== "",
+      });
+      saveString(VIDEO_BACKGROUND_KEY, videoBackground);
+      return { videoBackground };
+    }),
+  // Clearing the image ("") must also drop a "custom" selection, or the
+  // compositor would be asked for a picture that no longer exists.
+  setVideoBackgroundImage: (dataUrl) => {
+    const persisted = saveStringChecked(VIDEO_BACKGROUND_IMAGE_KEY, dataUrl);
+    set((s) => {
+      const videoBackground = dataUrl
+        ? s.videoBackground
+        : s.videoBackground === "custom"
+          ? DEFAULT_BACKGROUND
+          : s.videoBackground;
+      if (videoBackground !== s.videoBackground) saveString(VIDEO_BACKGROUND_KEY, videoBackground);
+      return { videoBackgroundImage: dataUrl, videoBackground };
+    });
+    return persisted;
   },
   setPeerVideo: (peerId, hasVideo) =>
     set((state) => {
