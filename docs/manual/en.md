@@ -356,6 +356,9 @@ answered first.
 
 ## With Alt
 
+On a Mac, `Alt` means the **Option** key (the one next to Command) — everything
+below works the same with it, and the app labels these shortcuts "Option" there.
+
 | Key                                    | Action                                                                             |
 | -------------------------------------- | ---------------------------------------------------------------------------------- |
 | `Alt` + `1` … `Alt` + `9`              | Read the last messages aloud. `1` is the newest, `2` the one before it, and so on. |
@@ -656,7 +659,12 @@ administrator.
 sharing or streaming audio, changing ducking, live streaming or writing in the
 chat, that button is not in the bar and the matching letter (`R`, `A`, `F`,
 `D`) answers "You can't do that in this room". The chat panel still opens even
-if you can't write, because every announcement still lands there.
+if you can't write, because every announcement still lands there. The same goes
+for a recording's **Download** and **Tracks** buttons: they appear only for the
+people allowed to record — everybody else still hears that the call is being
+recorded and sees the **REC** badge, but is never handed the file. Someone named
+administrator while an administrators-only recording exists is told they can now
+download it.
 
 The room carries the **MOD** badge in the header, and on entry it is announced
 as moderated along with who the administrators are. Every change (naming,

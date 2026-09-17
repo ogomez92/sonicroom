@@ -21,6 +21,7 @@ import { useRoomStore } from "../stores/room";
 import { apiUrl } from "../lib/runtime-config";
 import { DeviceSettings } from "./DeviceSettings";
 import { StreamSettings } from "./StreamSettings";
+import { altKeyLabel } from "../lib/keys";
 import { m } from "../paraglide/messages.js";
 
 interface AudioControlsProps {
@@ -424,7 +425,11 @@ export function AudioControls({
                 : "bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
             }`}
             aria-label={notesUrl ? m.controls_notes_open() : m.controls_notes()}
-            title={notesUrl ? m.controls_notes_open_title() : m.controls_notes_title()}
+            title={
+              notesUrl
+                ? m.controls_notes_open_title({ alt: altKeyLabel() })
+                : m.controls_notes_title({ alt: altKeyLabel() })
+            }
           >
             <NotebookPen className="h-5 w-5" />
           </button>

@@ -22,7 +22,7 @@ export interface JoinResponse {
     producers: Array<{ producerId: string; source: string; title?: string }>;
   }>;
   mode: "p2p" | "sfu";
-  recording: { recordingId: string } | null;
+  recording: { recordingId: string | null } | null;
   streaming?: boolean;
   voiceActive?: boolean;
   duckingEnabled?: boolean;

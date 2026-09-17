@@ -373,6 +373,10 @@ libres allí.
 
 ## Con Alt
 
+En un Mac, `Alt` es la tecla **Opción** (la que está junto a Comando): todo lo
+de abajo funciona igual con ella, y allí la aplicación llama «Opción» a estos
+atajos.
+
 | Tecla                                      | Acción                                                                                   |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | `Alt` + `1` … `Alt` + `9`                  | Lee los últimos mensajes en voz alta. `1` es el más reciente, `2` el anterior, y así.    |
@@ -690,7 +694,12 @@ compartir o emitir audio, cambiar el atenuado, retransmitir o escribir en el
 chat, ese botón no está en la barra y la letra correspondiente (`R`, `A`, `F`,
 `D`) responde «No puedes hacer eso en esta sala». El panel de chat sigue
 abriéndose aunque no puedas escribir, porque ahí siguen quedando todos los
-avisos.
+avisos. Lo mismo vale para los botones **Descargar** y **Pistas** de una
+grabación: solo aparecen a quien tiene permiso para grabar — los demás oyen
+igualmente que la llamada se está grabando y ven el distintivo **REC**, pero
+nunca se les entrega el archivo. A quien nombran administrador mientras existe
+una grabación reservada a administradores se le avisa de que ya puede
+descargarla.
 
 La sala lleva la insignia **MOD** en la cabecera, y al entrar se anuncia que es
 moderada y quiénes son los administradores. Todos los cambios (nombramientos,

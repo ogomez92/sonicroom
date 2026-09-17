@@ -136,6 +136,30 @@ export function createRoomHelpers(
     }
   }
 
+  // Whether this peer may record — and therefore DOWNLOAD a recording. The
+  // download endpoints are capability-keyed on the recording id (no session),
+  // so "may download" is decided by who is ever handed the id: it is nulled in
+  // the join snapshot / `recording-started` / `recording-stopped` for a peer
+  // the policy keeps from recording, mirroring the notes URL.
+  function canRecord(room: Room, peerId: string): boolean {
+    return allowed(room.moderation, isAdmin(room, peerId), "recording");
+  }
+
+  // Hand the room's recording id (in progress or finished-but-downloadable) to
+  // every peer allowed to record — or, with `only`, to that one peer (a freshly
+  // named admin). `recordingId: null` withdraws it (a revoked admin — their
+  // buttons go with the role; a file they already fetched is theirs).
+  function sendRecordingAccess(room: Room, only?: string, withdraw = false) {
+    const rec = recordingManager.getRecording(room.name);
+    if (!rec && !withdraw) return;
+    const targets = only ? [only] : [...room.peers.keys()];
+    for (const id of targets) {
+      const ok = canRecord(room, id);
+      if (withdraw && ok) continue;
+      io.to(id).emit("recording-access", { recordingId: ok && rec ? rec.id : null });
+    }
+  }
+
   // Auto-ducking: the room's AudioLevelObserver watches VOICE producers only
   // (music producers are never added — see the produce handler), so it fires
   // 'volumes' when someone talks and 'silence' when nobody does. We broadcast a
@@ -346,8 +370,10 @@ export function createRoomHelpers(
     console.log(`[ws] last admin left ${room.name}: room is no longer moderated`);
     io.to(room.name).emit("moderation-ended", {});
     if (room.pendingJoins.size > 0) broadcastJoinRequests(room);
-    // Likewise the shared note, if it was admins-only until now.
+    // Likewise the shared note and the recording download, if they were
+    // admins-only until now.
     sendNotesUrl(room, null);
+    sendRecordingAccess(room);
   }
 
   // Remove a peer the room voted out — or, in a moderated room, one an admin
@@ -429,6 +455,8 @@ export function createRoomHelpers(
     canApproveJoins,
     canOpenNotes,
     sendNotesUrl,
+    canRecord,
+    sendRecordingAccess,
     endModerationIfNoAdmins,
   };
 }

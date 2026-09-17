@@ -913,7 +913,7 @@ export function useMediasoup() {
           // Room type (sticky server-side). True ONLY for a video room — the
           // single switch that loads the video controller + UI.
           isVideo?: boolean;
-          recording: { recordingId: string } | null;
+          recording: { recordingId: string | null } | null;
           streaming?: boolean;
           voiceActive?: boolean;
           duckingEnabled?: boolean;

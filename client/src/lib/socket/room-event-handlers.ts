@@ -9,6 +9,7 @@ import type { Socket } from "socket.io-client";
 import { useRoomStore } from "../../stores/room";
 import { getSharedAudioContext } from "../audio/shared-context";
 import { playCue } from "../sounds";
+import { altKeyLabel } from "../keys";
 import { formatMessage, META_SEP, type ChatMessage } from "../chat";
 import {
   announce_a_participant,
@@ -33,6 +34,7 @@ import {
   announce_you_admin_promoted,
   announce_moderation_ended,
   announce_notes_available,
+  announce_recording_available,
   announce_you_were_muted,
 } from "../../paraglide/messages.js";
 
@@ -40,13 +42,30 @@ const store = useRoomStore;
 
 // --- Recording (room-wide; the server forces SFU while recording) ---
 export function registerRecordingHandlers(socket: Socket) {
-  socket.on("recording-started", ({ recordingId, by }: { recordingId: string; by: string }) => {
-    // Two near-simultaneous starts can broadcast this twice for the same
-    // recording — announce it only once.
+  // `recordingId` is the download capability. In a moderated room a peer the
+  // policy keeps from recording gets null here (and in the join snapshot): the
+  // REC badge and the announcement still land, the download buttons don't.
+  socket.on(
+    "recording-started",
+    ({ recordingId, by }: { recordingId: string | null; by: string }) => {
+      // Two near-simultaneous starts can broadcast this twice for the same
+      // recording — announce it only once.
+      const s = store.getState();
+      if (s.isRecording && s.recordingId === recordingId) return;
+      s.setRecording(true, recordingId);
+      s.announceEvent(announce_recording_started({ name: by }));
+    },
+  );
+
+  // Our access to the recording download changed with our role in a moderated
+  // room: a freshly named admin is handed the id (announced, like the notes
+  // URL), a revoked one has it withdrawn (silently — the role change itself
+  // was just announced; the buttons simply go).
+  socket.on("recording-access", ({ recordingId }: { recordingId: string | null }) => {
     const s = store.getState();
-    if (s.isRecording && s.recordingId === recordingId) return;
-    s.setRecording(true, recordingId);
-    s.announceEvent(announce_recording_started({ name: by }));
+    if (s.recordingId === recordingId) return;
+    s.setRecording(s.isRecording, recordingId);
+    if (recordingId) s.announceEvent(announce_recording_available());
   });
 
   socket.on("recording-stopped", () => {
@@ -221,7 +240,7 @@ export function registerChatHandlers(socket: Socket, chatHintGiven: { current: b
     // recent messages aloud even while the chat panel is closed.
     if (!chatHintGiven.current) {
       chatHintGiven.current = true;
-      announcement += `${META_SEP}${announce_chat_hint()}`;
+      announcement += `${META_SEP}${announce_chat_hint({ alt: altKeyLabel() })}`;
     }
     store.getState().announceChat(announcement);
     playCue(getSharedAudioContext(), "message");

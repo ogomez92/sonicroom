@@ -49,10 +49,16 @@ export function registerRecordingHandlers(ctx: ConnectionContext) {
       // Force SFU if we're in P2P so the server can see the media.
       helpers.applyModeDecision(room);
 
-      io.to(room.name).emit("recording-started", {
-        recordingId: rec.id,
-        by: session.currentPeer?.displayName ?? "Someone",
-      });
+      // The recording id is the download capability: a peer the policy keeps
+      // from recording still learns the room is being recorded (REC badge,
+      // announcement) but is handed no id, so no download buttons.
+      const by = session.currentPeer?.displayName ?? "Someone";
+      for (const id of room.peers.keys()) {
+        io.to(id).emit("recording-started", {
+          recordingId: helpers.canRecord(room, id) ? rec.id : null,
+          by,
+        });
+      }
       cb({ ok: true, recordingId: rec.id });
     } catch (err) {
       cb({ ok: false, error: err instanceof Error ? err.message : "Failed to start recording" });
@@ -73,7 +79,11 @@ export function registerRecordingHandlers(ctx: ConnectionContext) {
       // Finalize (not discard): captures stop, but the file stays
       // downloadable until its TTL / a new recording / room exit.
       const rec = await recordingManager.finalize(room.name);
-      io.to(room.name).emit("recording-stopped", { recordingId: rec?.id ?? null });
+      for (const id of room.peers.keys()) {
+        io.to(id).emit("recording-stopped", {
+          recordingId: rec && helpers.canRecord(room, id) ? rec.id : null,
+        });
+      }
       // Recording no longer pins SFU — fall back to P2P if <=2 peers remain.
       helpers.applyModeDecision(room);
       cb({ ok: true });

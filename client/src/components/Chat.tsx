@@ -3,6 +3,7 @@ import { Send, X } from "lucide-react";
 import { useRoomStore, type ChatAnnounceMode } from "../stores/room";
 import { relativeTime, messageContent, META_SEP } from "../lib/chat";
 import { warmUpTts } from "../lib/tts";
+import { altKeyLabel } from "../lib/keys";
 import { m } from "../paraglide/messages.js";
 
 interface ChatProps {
@@ -259,7 +260,7 @@ export function Chat({ onSend, onClose, focusSignal, composer = "on" }: ChatProp
             <Send className="h-4 w-4" />
           </button>
           <p id="chat-input-help" className="sr-only">
-            {m.chat_help()}
+            {m.chat_help({ alt: altKeyLabel() })}
           </p>
         </form>
       )}

@@ -91,6 +91,10 @@ export function registerAdminHandlers(ctx: ConnectionContext) {
     //   (a revoked admin keeps a link they already opened — a NoteLab link
     //   can't be withdrawn — but their button goes with the role).
     if (admin) helpers.sendNotesUrl(room, null, targetId);
+    // - The recording download: the recording id IS the download capability,
+    //   so an admins-only recording is handed to a new admin now and withdrawn
+    //   from a revoked one (their buttons go; a file already fetched stays).
+    if (room.moderation.recording === "admins") helpers.sendRecordingAccess(room, targetId, !admin);
     // - Vote-kick: a new admin can no longer be a target (votes against them
     //   are dropped); a revoked one's own votes stop counting when only admins
     //   vote, and that electorate's threshold moved with its size — so settle

@@ -20,6 +20,7 @@ import { FakeDevice, FakeProducer, resetMediasoupMock } from "../test/mediasoup-
 import { mediaController } from "../test/media-mock";
 import {
   announce_mic_muted,
+  announce_recording_available,
   announce_recording_started,
   announce_no_mic,
   announce_you_were_muted,
@@ -647,6 +648,40 @@ describe("recording", () => {
     ).toBe(true);
     await fire("recording-stopped");
     expect(useRoomStore.getState().isRecording).toBe(false);
+    h.unmount();
+  });
+
+  // Moderated room, recording admins-only: a denied peer is told the call is
+  // recorded (badge + announcement) but handed no id — the id IS the download
+  // capability — until a role change hands it over (announced) or takes it
+  // back (silently).
+  it("keeps the download capability from a peer who may not record", async () => {
+    const h = await sfuJoin([peerEntry("id-bob", [voiceProd("p1")]), peerEntry("id-carol")]);
+    await fire("recording-started", { recordingId: null, by: "Bob" });
+    expect(useRoomStore.getState().isRecording).toBe(true);
+    expect(useRoomStore.getState().recordingId).toBeNull();
+    expect(
+      systemMessages().some((m) => m.text === announce_recording_started({ name: "Bob" })),
+    ).toBe(true);
+    // A duplicate broadcast of the same (null-id) start is not re-announced.
+    await fire("recording-started", { recordingId: null, by: "Bob" });
+    expect(
+      systemMessages().filter((m) => m.text === announce_recording_started({ name: "Bob" })),
+    ).toHaveLength(1);
+
+    // Named admin: the id arrives and it is announced.
+    await fire("recording-access", { recordingId: "rec-x" });
+    expect(useRoomStore.getState().recordingId).toBe("rec-x");
+    expect(useRoomStore.getState().isRecording).toBe(true);
+    expect(systemMessages().some((m) => m.text === announce_recording_available())).toBe(true);
+
+    // Revoked: withdrawn without a second announcement.
+    await fire("recording-access", { recordingId: null });
+    expect(useRoomStore.getState().recordingId).toBeNull();
+    expect(useRoomStore.getState().isRecording).toBe(true);
+    expect(systemMessages().filter((m) => m.text === announce_recording_available())).toHaveLength(
+      1,
+    );
     h.unmount();
   });
 });

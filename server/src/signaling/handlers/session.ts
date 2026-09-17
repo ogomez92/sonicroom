@@ -240,8 +240,14 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
           targetId,
           votes: voters.size,
         })),
+        // The id is the download capability — nulled for a peer the policy
+        // keeps from recording (they still see the REC badge).
         recording: recordingManager.isRecording(room.name)
-          ? { recordingId: recordingManager.getRecording(room.name)!.id }
+          ? {
+              recordingId: helpers.canRecord(room, socket.id)
+                ? recordingManager.getRecording(room.name)!.id
+                : null,
+            }
           : null,
         // Whether the room is being streamed live to Icecast (room-wide, like
         // recording). The Icecast target itself is never shared.

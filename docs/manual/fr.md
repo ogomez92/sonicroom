@@ -382,6 +382,10 @@ faut d'abord y répondre.
 
 ## Avec Alt
 
+Sur un Mac, `Alt` désigne la touche **Option** (celle à côté de Commande) : tout
+ce qui suit fonctionne de la même façon avec elle, et l'application y nomme ces
+raccourcis « Option ».
+
 | Touche                                     | Action                                                                                        |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | `Alt` + `1` … `Alt` + `9`                  | Relit les derniers messages. `1` est le plus récent, `2` le précédent, et ainsi de suite.     |
@@ -711,7 +715,13 @@ d'enregistrer, de partager ou diffuser de l'audio, de changer l'atténuation, de
 diffuser en direct ou d'écrire dans le chat, ce bouton n'est pas dans la barre
 et la lettre correspondante (`R`, `A`, `F`, `D`) répond « Vous ne pouvez pas
 faire cela dans ce salon ». Le panneau de chat s'ouvre quand même si vous ne
-pouvez pas écrire, car toutes les annonces continuent d'y arriver.
+pouvez pas écrire, car toutes les annonces continuent d'y arriver. Il en va de
+même des boutons **Télécharger** et **Pistes** d'un enregistrement : ils
+n'apparaissent que pour les personnes autorisées à enregistrer — les autres
+entendent bien que l'appel est enregistré et voient le badge **REC**, mais le
+fichier ne leur est jamais remis. Une personne nommée administrateur alors qu'un
+enregistrement réservé aux administrateurs existe est prévenue qu'elle peut
+désormais le télécharger.
 
 Le salon porte le badge **MOD** dans l'en-tête, et à l'entrée il est annoncé
 comme modéré, avec le nom des administrateurs. Chaque changement (nominations,
