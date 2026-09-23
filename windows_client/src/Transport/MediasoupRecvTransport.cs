@@ -26,6 +26,14 @@ public sealed class MediasoupRecvTransport
     private RTCPeerConnection? _pc;
     private TransportParams? _tp;
     private bool _sdpNegotiated;
+    // new-producer events are delivered independently by SocketIOClient. When several
+    // browser producers appear together (most notably voice + file during a P2P -> SFU
+    // switch), their ConsumeAsync calls can therefore overlap. Transport creation and the
+    // first-consumer SDP negotiation are both one-time operations, so serialize the whole
+    // consume handshake: without this gate, concurrent calls can create competing recv
+    // transports and leave the server's current transport pointing at a different DTLS/ICE
+    // session than the local peer connection, producing a connected UI but silent audio.
+    private readonly System.Threading.SemaphoreSlim _consumeGate = new(1, 1);
     private readonly Dictionary<uint, string> _consumerBySsrc = new(); // ssrc → consumerId
 
     public event Action<string>? Log;
@@ -42,21 +50,29 @@ public sealed class MediasoupRecvTransport
     /// <summary>Consume one producer. Establishes the recv transport lazily on the first call.</summary>
     public async Task<ConsumeResult> ConsumeAsync(string producerId)
     {
-        await EnsureTransportAsync();
-
-        var consumer = await _rpc.ConsumeAsync(producerId, _device.RecvRtpCapabilities);
-        var ssrc = consumer.RtpParameters.Encodings?.FirstOrDefault()?.Ssrc ?? 0;
-        _consumerBySsrc[ssrc] = consumer.ConsumerId;
-        Log?.Invoke($"consume {producerId} → consumerId={consumer.ConsumerId} ssrc={ssrc}");
-
-        if (!_sdpNegotiated)
+        await _consumeGate.WaitAsync();
+        try
         {
-            NegotiateFromFirstConsumer(consumer);
-            await _pc!.setLocalDescription(_pendingAnswer!); // triggers ICE → DTLS
-            _sdpNegotiated = true;
-        }
+            await EnsureTransportAsync();
 
-        return consumer;
+            var consumer = await _rpc.ConsumeAsync(producerId, _device.RecvRtpCapabilities);
+            var ssrc = consumer.RtpParameters.Encodings?.FirstOrDefault()?.Ssrc ?? 0;
+            _consumerBySsrc[ssrc] = consumer.ConsumerId;
+            Log?.Invoke($"consume {producerId} → consumerId={consumer.ConsumerId} ssrc={ssrc}");
+
+            if (!_sdpNegotiated)
+            {
+                NegotiateFromFirstConsumer(consumer);
+                await _pc!.setLocalDescription(_pendingAnswer!); // triggers ICE → DTLS
+                _sdpNegotiated = true;
+            }
+
+            return consumer;
+        }
+        finally
+        {
+            _consumeGate.Release();
+        }
     }
 
     private RTCSessionDescriptionInit? _pendingAnswer;
