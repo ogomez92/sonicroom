@@ -193,6 +193,7 @@ export async function assertPublicAudioUrl(raw: string): Promise<void> {
 // backup, so "links like it" keep working even when the first guess is wrong.
 
 export const YTDLP_AUDIO_CONTENT_TYPE = "audio/webm";
+export const YTDLP_VIDEO_CONTENT_TYPE = "video/webm";
 
 const DEFAULT_FIRST_BYTE_TIMEOUT_MS = 45_000;
 
@@ -220,6 +221,9 @@ const DIRECT_STREAM_EXTENSIONS = new Set([
   ".mkv",
   ".mov",
   ".flv",
+  ".avi",
+  ".divx",
+  ".xvid",
 ]);
 
 // True if the URL path looks like a direct media stream (IPTV/HLS/DASH/raw).
@@ -301,6 +305,29 @@ export function buildYtDlpArgs(url: string): string[] {
   ];
 }
 
+// The video equivalent preserves the best available picture plus sound. ffmpeg
+// below normalizes it to browser-playable WebM, so source containers/codecs
+// (including IPTV MPEG-TS/HLS and Matroska) never leak to the client.
+export function buildYtDlpVideoArgs(url: string): string[] {
+  return [
+    "--no-playlist",
+    "--no-progress",
+    "--no-warnings",
+    "--quiet",
+    "--no-cache-dir",
+    "--socket-timeout",
+    "15",
+    "--retries",
+    "2",
+    "-f",
+    "bestvideo*+bestaudio/best",
+    "-o",
+    "-",
+    "--",
+    url,
+  ];
+}
+
 // ffmpeg argv: read yt-dlp's container on stdin, drop any video, and emit a
 // progressive Opus-in-WebM stream on stdout that streams cleanly to the browser.
 export function buildAudioTranscodeArgs(): string[] {
@@ -313,6 +340,10 @@ export function buildAudioTranscodeArgs(): string[] {
     "-vn",
     "-c:a",
     "libopus",
+    // A common TV/movie source is AC-3 5.1. libopus cannot infer a mapping
+    // for every 5.1 layout, while SonicRoom's media producer is stereo anyway.
+    "-ac",
+    "2",
     "-b:a",
     "160k",
     "-f",
@@ -355,6 +386,60 @@ export function buildFfmpegStreamArgs(url: string): string[] {
     "-vn",
     "-c:a",
     "libopus",
+    "-ac",
+    "2",
+    "-b:a",
+    "160k",
+    "-f",
+    "webm",
+    "pipe:1",
+  ];
+}
+
+// Video rooms use this pipeline for URLs/IPTV. VP8+Opus in WebM is the shared
+// browser baseline and, unlike a direct upstream response, is CORS-safe for
+// Web Audio and captureStream. The realtime settings matter for live HLS/TS.
+export function buildFfmpegVideoStreamArgs(url: string): string[] {
+  return [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-protocol_whitelist",
+    "http,https,tcp,tls,crypto",
+    "-user_agent",
+    STREAM_USER_AGENT,
+    "-rw_timeout",
+    "15000000",
+    "-reconnect",
+    "1",
+    "-reconnect_streamed",
+    "1",
+    "-reconnect_delay_max",
+    "2",
+    "-analyzeduration",
+    "2000000",
+    "-probesize",
+    "1000000",
+    "-i",
+    url,
+    "-map",
+    "0:v:0?",
+    "-map",
+    "0:a?",
+    "-c:v",
+    "libvpx",
+    "-deadline",
+    "realtime",
+    "-cpu-used",
+    "5",
+    "-b:v",
+    "2M",
+    "-maxrate",
+    "3M",
+    "-c:a",
+    "libopus",
+    "-ac",
+    "2",
     "-b:a",
     "160k",
     "-f",
@@ -383,6 +468,7 @@ async function gateTranscodedAudio(
   pipeline: ChildProcess[],
   readDiagnostics: () => string,
   firstByteTimeoutMs: number,
+  contentType = YTDLP_AUDIO_CONTENT_TYPE,
 ): Promise<YtDlpExtraction> {
   let destroyed = false;
   const destroy = () => {
@@ -451,7 +537,7 @@ async function gateTranscodedAudio(
     );
   }
   clearTimeout(timer);
-  return { contentType: YTDLP_AUDIO_CONTENT_TYPE, stream: output, destroy };
+  return { contentType, stream: output, destroy };
 }
 
 // Resolve a site URL (YouTube/SoundCloud/Bandcamp/…) by piping yt-dlp's best
@@ -504,6 +590,89 @@ export async function streamAudioWithFfmpeg(
   const readDiagnostics = captureStderr(ffmpeg);
 
   return gateTranscodedAudio(ffmpeg, [ffmpeg], readDiagnostics, firstByteTimeoutMs);
+}
+
+// Resolve a video page through yt-dlp, then normalize its selected media to
+// VP8/Opus WebM. This is the fallback for a landing-page URL rather than a
+// direct HLS/DASH/IPTV stream.
+export async function streamVideoWithYtDlp(
+  raw: string,
+  options: YtDlpOptions = {},
+): Promise<YtDlpExtraction> {
+  await resolvePublicAudioUrl(raw);
+  const spawn = options.spawn ?? nodeSpawn;
+  const ytDlpPath = options.ytDlpPath ?? process.env.YTDLP_PATH ?? "yt-dlp";
+  const ffmpegPath = options.ffmpegPath ?? process.env.FFMPEG_PATH ?? "ffmpeg";
+  const firstByteTimeoutMs = options.firstByteTimeoutMs ?? DEFAULT_FIRST_BYTE_TIMEOUT_MS;
+  const ytdlp = spawn(ytDlpPath, buildYtDlpVideoArgs(raw), {
+    cwd: tmpdir(),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const ffmpeg = spawn(
+    ffmpegPath,
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      "pipe:0",
+      "-map",
+      "0:v:0?",
+      "-map",
+      "0:a?",
+      "-c:v",
+      "libvpx",
+      "-deadline",
+      "realtime",
+      "-cpu-used",
+      "5",
+      "-b:v",
+      "2M",
+      "-c:a",
+      "libopus",
+      "-ac",
+      "2",
+      "-b:a",
+      "160k",
+      "-f",
+      "webm",
+      "pipe:1",
+    ],
+    { cwd: tmpdir(), stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const readDiagnostics = captureStderr(ytdlp, ffmpeg);
+  ytdlp.stdout?.on("error", () => {});
+  ffmpeg.stdin?.on("error", () => {});
+  if (ytdlp.stdout && ffmpeg.stdin) ytdlp.stdout.pipe(ffmpeg.stdin);
+  return gateTranscodedAudio(
+    ffmpeg,
+    [ytdlp, ffmpeg],
+    readDiagnostics,
+    firstByteTimeoutMs,
+    YTDLP_VIDEO_CONTENT_TYPE,
+  );
+}
+
+// Direct media sources include IPTV/HLS/DASH as well as MP4/MKV/WebM URLs.
+export async function streamVideoWithFfmpeg(
+  raw: string,
+  options: YtDlpOptions = {},
+): Promise<YtDlpExtraction> {
+  await resolvePublicAudioUrl(raw);
+  const spawn = options.spawn ?? nodeSpawn;
+  const ffmpegPath = options.ffmpegPath ?? process.env.FFMPEG_PATH ?? "ffmpeg";
+  const firstByteTimeoutMs = options.firstByteTimeoutMs ?? DEFAULT_FIRST_BYTE_TIMEOUT_MS;
+  const ffmpeg = spawn(ffmpegPath, buildFfmpegVideoStreamArgs(raw), {
+    cwd: tmpdir(),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return gateTranscodedAudio(
+    ffmpeg,
+    [ffmpeg],
+    captureStderr(ffmpeg),
+    firstByteTimeoutMs,
+    YTDLP_VIDEO_CONTENT_TYPE,
+  );
 }
 
 // Each transcode spawns ffmpeg (and yt-dlp for site URLs), and /api/audio-proxy
@@ -568,6 +737,46 @@ export async function streamFallbackAudio(
       }
     }
     // Free the slot when the consumer tears the stream down (response close).
+    return {
+      ...extraction,
+      destroy: () => {
+        release();
+        extraction.destroy();
+      },
+    };
+  } catch (err) {
+    release();
+    throw err;
+  }
+}
+
+// Video-mode counterpart to streamFallbackAudio. Always tries ffmpeg first:
+// it is the correct route for direct IPTV URLs even when their path is opaque;
+// yt-dlp remains the fallback for ordinary video landing pages.
+export async function streamFallbackVideo(
+  raw: string,
+  options: YtDlpOptions = {},
+): Promise<YtDlpExtraction> {
+  const limit = options.maxConcurrentTranscodes ?? MAX_CONCURRENT_TRANSCODES;
+  if (activeTranscodes >= limit) throw new TranscodeBusyError();
+  activeTranscodes += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeTranscodes -= 1;
+  };
+  try {
+    let extraction: YtDlpExtraction;
+    try {
+      extraction = await streamVideoWithFfmpeg(raw, options);
+    } catch (primaryErr) {
+      try {
+        extraction = await streamVideoWithYtDlp(raw, options);
+      } catch {
+        throw primaryErr;
+      }
+    }
     return {
       ...extraction,
       destroy: () => {

@@ -164,10 +164,10 @@ export function useMediasoup() {
   // otherwise re-add stale connections after a newer teardown already ran.
   const transitionChainRef = useRef<Promise<void>>(Promise.resolve());
   // The outgoing audio graph + the share/file producers live in OutgoingAudioGraph
-  // (constructed below). The hook keeps only the <audio> element streaming a local
+  // (constructed below). The hook keeps only the media element streaming a local
   // file: the element decoding it, its object URL, and an AbortController for the
   // element's ended/error listeners (so swapping the file never fires a stale one).
-  const fileAudioRef = useRef<HTMLAudioElement | null>(null);
+  const fileAudioRef = useRef<HTMLMediaElement | null>(null);
   const fileObjectUrlRef = useRef<string | null>(null);
   const fileAbortRef = useRef<AbortController | null>(null);
   // Owner-side "someone stopped my stream" cleanup, bridged through a ref: the
@@ -1542,6 +1542,7 @@ export function useMediasoup() {
         "file-stream-stopped",
         ({ peerId, displayName: name }: { peerId: string; displayName: string }) => {
           registry.removeFilesOwnedBy(peerId);
+          videoRef.current?.removeOwnedBy(peerId, "file-video");
           store.getState().announceEvent(announce_file_stream_stopped({ name }));
           playCue(getSharedAudioContext(), "share-stop");
         },
@@ -1586,8 +1587,10 @@ export function useMediasoup() {
             registry.removeShareStream(producerId);
             // The server closed their screen picture with the share (video rooms).
             videoRef.current?.removeOwnedBy(ownerId, "screen");
-          } else if (source === "file") registry.removeFileStream(producerId);
-          else registry.removeMicStream(producerId);
+          } else if (source === "file") {
+            registry.removeFileStream(producerId);
+            videoRef.current?.removeOwnedBy(ownerId, "file-video");
+          } else registry.removeMicStream(producerId);
           const name = store.getState().peers.get(ownerId)?.displayName ?? announce_a_participant();
           store.getState().announceEvent(announce_peer_stream_stopped({ name }));
           playCue(getSharedAudioContext(), "share-stop");
@@ -1907,6 +1910,7 @@ export function useMediasoup() {
     fileAbortRef.current = null;
     // Close the file producer + disconnect the file nodes (the graph owns those).
     graph.teardownFileNodes();
+    videoRef.current?.detachFile();
     if (fileAudioRef.current) {
       fileAudioRef.current.pause();
       fileAudioRef.current.src = "";
@@ -1960,6 +1964,7 @@ export function useMediasoup() {
       fileAbortRef.current?.abort();
       fileAbortRef.current = null;
       graph.disconnectFileSource();
+      videoRef.current?.detachFile();
       if (fileAudioRef.current) {
         fileAudioRef.current.pause();
         fileAudioRef.current.src = "";
@@ -1970,35 +1975,49 @@ export function useMediasoup() {
         fileObjectUrlRef.current = null;
       }
 
-      // New <audio> element decoding a local object URL or same-origin server
-      // source (library file / proxied public URL).
+      // A <video> can decode both music and picture sources. Its audio goes
+      // through Web Audio as before; in a video room captureStream supplies an
+      // additional WebRTC picture producer. An audio room never captures it.
       fileObjectUrlRef.current = objectUrl ?? null;
-      const audioEl = new Audio();
-      audioEl.src = src;
-      (audioEl as unknown as Record<string, boolean>).playsInline = true;
-      fileAudioRef.current = audioEl;
+      const mediaEl = document.createElement("video");
+      mediaEl.src = src;
+      mediaEl.playsInline = true;
+      fileAudioRef.current = mediaEl;
 
       // Wire the element into its own produced dest + a local monitor gain.
-      graph.connectFileElement(audioEl);
+      graph.connectFileElement(mediaEl);
 
       // Stop the whole stream when the file ends or fails to decode.
       const ac = new AbortController();
       fileAbortRef.current = ac;
-      audioEl.addEventListener("ended", () => void stopFileStream(announce_file_stream_ended()), {
+      mediaEl.addEventListener("ended", () => void stopFileStream(announce_file_stream_ended()), {
         signal: ac.signal,
       });
-      audioEl.addEventListener("error", () => void stopFileStream(announce_file_stream_error()), {
+      mediaEl.addEventListener("error", () => void stopFileStream(announce_file_stream_error()), {
         signal: ac.signal,
       });
 
       store.getState().setFileStream(name);
       try {
-        await audioEl.play();
+        await mediaEl.play();
         store.getState().setFileStreamPlaying(true);
       } catch {
         // Autoplay refused (rare — we're in a user gesture); land paused so the
         // window's play button can start it.
         store.getState().setFileStreamPlaying(false);
+      }
+
+      // captureStream is Chromium/Electron's media-to-WebRTC bridge. It is
+      // intentionally attempted only in video rooms: audio rooms retain the
+      // exact audio-only behaviour even when the selected source has pictures.
+      if (store.getState().roomIsVideo) {
+        const captureStream = (
+          mediaEl as HTMLVideoElement & {
+            captureStream?: () => MediaStream;
+          }
+        ).captureStream;
+        const videoTrack = captureStream?.call(mediaEl).getVideoTracks()[0];
+        if (videoTrack) await videoRef.current?.attachFile(videoTrack);
       }
 
       if (firstStart) {
@@ -2043,9 +2062,10 @@ export function useMediasoup() {
       const name = decodeURIComponent(
         url.pathname.split("/").filter(Boolean).pop() ?? url.hostname,
       );
-      await startFileSource(apiUrl(`/api/audio-proxy?url=${encodeURIComponent(url.href)}`), name);
+      const endpoint = store.getState().roomIsVideo ? "video-proxy" : "audio-proxy";
+      await startFileSource(apiUrl(`/api/${endpoint}?url=${encodeURIComponent(url.href)}`), name);
     },
-    [startFileSource],
+    [startFileSource, store],
   );
 
   const startServerFileStream = useCallback(
@@ -2396,8 +2416,8 @@ export function useMediasoup() {
   };
 }
 
-// Which producer sources are VIDEO (camera / screen picture) — only ever seen
+// Which producer sources are VIDEO (camera / screen / media-file picture) — only ever seen
 // in a video room; everything else is audio and goes to the audio registry.
 function isVideoSource(source: string | undefined): source is VideoSource {
-  return source === "camera" || source === "screen";
+  return source === "camera" || source === "screen" || source === "file-video";
 }

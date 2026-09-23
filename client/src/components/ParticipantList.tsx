@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { isPinned, type PeerState, type PinnedVideo } from "../stores/room";
 import { m } from "../paraglide/messages.js";
+import type { VideoSource } from "../lib/video/video-media";
 
 interface ParticipantListProps {
   // The local user, synthesized as a PeerState (peerId === localPeerId).
@@ -59,7 +60,7 @@ interface ParticipantListProps {
   // both to flip the option to "Unpin" and to KEEP offering it while the pinned
   // camera is momentarily off — otherwise a pin could become unremovable).
   pinnedVideo?: PinnedVideo | null;
-  onTogglePinVideo?: (peerId: string, source: "camera" | "screen") => void;
+  onTogglePinVideo?: (peerId: string, source: VideoSource) => void;
   // How tall the list may grow before it scrolls itself. A video room passes a
   // smaller cap so the pictures keep the majority of the window; audio rooms
   // (where the list IS the UI) keep the roomy default.
@@ -458,7 +459,7 @@ interface ParticipantOptionsProps {
   onDescribeVideo?: (peerId: string, source: "camera" | "screen") => void;
   // Video rooms only: "Pin / Unpin X's video / screen". Undefined elsewhere.
   pinnedVideo?: PinnedVideo | null;
-  onTogglePinVideo?: (peerId: string, source: "camera" | "screen") => void;
+  onTogglePinVideo?: (peerId: string, source: VideoSource) => void;
   announce: (message: string) => void;
   onClose: () => void;
 }
