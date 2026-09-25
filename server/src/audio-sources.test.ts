@@ -217,6 +217,7 @@ describe("buildAudioTranscodeArgs", () => {
   it("drops video and emits a progressive Opus/WebM stream to stdout", () => {
     const args = buildAudioTranscodeArgs();
     assert.ok(args.includes("-vn"));
+    assert.equal(after(args, "-ac"), "2");
     assert.equal(after(args, "-c:a"), "libopus");
     assert.equal(after(args, "-f"), "webm");
     assert.equal(args.at(-1), "pipe:1");
@@ -274,6 +275,7 @@ describe("buildFfmpegStreamArgs", () => {
     assert.equal(after(args, "-protocol_whitelist"), "http,https,tcp,tls,crypto");
     assert.equal(after(args, "-i"), "http://host/live/123.ts");
     assert.ok(args.includes("-vn"));
+    assert.equal(after(args, "-ac"), "2");
     assert.equal(after(args, "-c:a"), "libopus");
     assert.equal(args.at(-1), "pipe:1");
   });

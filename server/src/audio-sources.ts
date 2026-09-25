@@ -311,6 +311,10 @@ export function buildAudioTranscodeArgs(): string[] {
     "-i",
     "pipe:0",
     "-vn",
+    // Downmix to stereo: libopus rejects 5.1(side) and other surround layouts
+    // common on IPTV (AC3 5.1), which failed with "no packets" before any audio.
+    "-ac",
+    "2",
     "-c:a",
     "libopus",
     "-b:a",
@@ -353,6 +357,10 @@ export function buildFfmpegStreamArgs(url: string): string[] {
     "-i",
     url,
     "-vn",
+    // Downmix to stereo: libopus rejects 5.1(side) and other surround layouts
+    // common on IPTV (AC3 5.1), which failed with "no packets" before any audio.
+    "-ac",
+    "2",
     "-c:a",
     "libopus",
     "-b:a",
