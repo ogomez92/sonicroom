@@ -51,6 +51,7 @@ const MIC_DEVICE_KEY = "sonicroom:micDeviceId";
 const SPEAKER_DEVICE_KEY = "sonicroom:speakerDeviceId";
 const VOICE_PROCESSING_KEY = "sonicroom:voiceProcessing";
 const HIFI_VOICE_KEY = "sonicroom:hifiVoice";
+const LOUDNESS_BOOST_KEY = "sonicroom:loudnessBoost";
 
 function loadString(key: string): string {
   try {
@@ -361,6 +362,9 @@ interface RoomState {
   // Browser voice processing (echo cancellation, noise suppression and
   // automatic gain). Defaults on for iOS/iPadOS and off elsewhere.
   voiceProcessingEnabled: boolean;
+  // Opt-in "loudness boost": compress + lift the outgoing mic (the level part
+  // of voice processing, without echo cancel / noise suppression). Default off.
+  loudnessBoostEnabled: boolean;
   // Opt-in hi-fi voice (stereo, ~128 kbps). Default off → mono ~64 kbps.
   // Read at call start (join / P2P offer / produce); applies on the next call.
   hifiVoiceEnabled: boolean;
@@ -497,6 +501,7 @@ interface RoomState {
   setMicDeviceId: (deviceId: string) => void;
   setSpeakerDeviceId: (deviceId: string) => void;
   setVoiceProcessingEnabled: (enabled: boolean) => void;
+  setLoudnessBoostEnabled: (enabled: boolean) => void;
   setHifiVoiceEnabled: (enabled: boolean) => void;
   // Replace the full set of extra mics to stream (the picker writes the new list).
   setStreamedMicDeviceIds: (deviceIds: string[]) => void;
@@ -581,6 +586,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   micDeviceId: loadString(MIC_DEVICE_KEY),
   speakerDeviceId: loadString(SPEAKER_DEVICE_KEY),
   voiceProcessingEnabled: loadVoiceProcessing(),
+  loudnessBoostEnabled: loadString(LOUDNESS_BOOST_KEY) === "true",
   hifiVoiceEnabled: loadHifiVoice(),
   streamedMicDeviceIds: loadStreamedMicDeviceIds(),
   micStereoByDevice: loadMicStereoByDevice(),
@@ -677,6 +683,10 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   setVoiceProcessingEnabled: (voiceProcessingEnabled) => {
     saveString(VOICE_PROCESSING_KEY, String(voiceProcessingEnabled));
     set({ voiceProcessingEnabled });
+  },
+  setLoudnessBoostEnabled: (loudnessBoostEnabled) => {
+    saveString(LOUDNESS_BOOST_KEY, String(loudnessBoostEnabled));
+    set({ loudnessBoostEnabled });
   },
   setHifiVoiceEnabled: (hifiVoiceEnabled) => {
     saveString(HIFI_VOICE_KEY, String(hifiVoiceEnabled));

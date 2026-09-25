@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff } from "lucide-react";
 import { useRoomStore, MAX_MIC_GAIN } from "../stores/room";
+import { createLoudnessBoost, routeLoudnessBoost } from "../lib/audio/outgoing-graph";
 import { applySpeakerToContext } from "../lib/audio-devices";
 import { microphoneConstraints } from "../lib/microphone";
 import { DeviceSettings } from "./DeviceSettings";
@@ -58,12 +59,15 @@ export function MicPreview() {
   const micDeviceId = useRoomStore((s) => s.micDeviceId);
   const speakerDeviceId = useRoomStore((s) => s.speakerDeviceId);
   const voiceProcessingEnabled = useRoomStore((s) => s.voiceProcessingEnabled);
+  const loudnessBoostEnabled = useRoomStore((s) => s.loudnessBoostEnabled);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
 
   const streamRef = useRef<MediaStream | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const gainRef = useRef<GainNode | null>(null);
+  // Preview mirrors the room graph: gain → (loudness boost) → limiter.
+  const boostRef = useRef<{ boost: GainNode; limiter: DynamicsCompressorNode } | null>(null);
   const rafRef = useRef<number | null>(null);
   const meterRef = useRef<HTMLDivElement | null>(null);
   // role="meter" element (precise value, read on demand) + the polite live
@@ -78,6 +82,13 @@ export function MicPreview() {
     if (ctx && gain) gain.gain.setTargetAtTime(micGain, ctx.currentTime, 0.03);
   }, [micGain]);
 
+  // Live-apply the loudness-boost toggle to an active preview.
+  useEffect(() => {
+    const gain = gainRef.current;
+    const nodes = boostRef.current;
+    if (gain && nodes) routeLoudnessBoost(gain, nodes.boost, nodes.limiter, loudnessBoostEnabled);
+  }, [loudnessBoostEnabled]);
+
   const stop = useCallback(() => {
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
@@ -86,6 +97,7 @@ export function MicPreview() {
     ctxRef.current?.close().catch(() => {});
     ctxRef.current = null;
     gainRef.current = null;
+    boostRef.current = null;
     const bar = meterRef.current;
     if (bar) {
       bar.style.transform = "scaleX(0)";
@@ -140,8 +152,11 @@ export function MicPreview() {
     // Use headphones to avoid the open mic feeding back through the speakers.
     const monitor = ctx.createGain();
     monitor.gain.value = 1;
+    const boost = createLoudnessBoost(ctx);
+    boost.output.connect(limiter);
     source.connect(gain);
-    gain.connect(limiter);
+    routeLoudnessBoost(gain, boost.input, limiter, useRoomStore.getState().loudnessBoostEnabled);
+    boostRef.current = { boost: boost.input, limiter };
     limiter.connect(analyser);
     analyser.connect(monitor);
     monitor.connect(ctx.destination);

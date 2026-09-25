@@ -135,6 +135,8 @@
   "settings_labels_hint": "Device names appear once microphone access is granted.",
   "settings_voice_processing_label": "Voice processing",
   "settings_voice_processing_hint": "Echo control, noise cleanup and auto level",
+  "settings_loudness_boost_label": "Loudness boost",
+  "settings_loudness_boost_hint": "Makes a quiet microphone louder. Does not change echo or noise settings.",
   "settings_hifi_voice_label": "Hi-fi voice (stereo)",
   "settings_hifi_voice_hint": "Send stereo at a higher bitrate. Uses more data; applies on your next call",
   "settings_extra_mics_label": "Extra microphones to stream",

@@ -446,6 +446,7 @@ export function useMediasoup() {
   const micDeviceId = useRoomStore((s) => s.micDeviceId);
   const speakerDeviceId = useRoomStore((s) => s.speakerDeviceId);
   const voiceProcessingEnabled = useRoomStore((s) => s.voiceProcessingEnabled);
+  const loudnessBoostEnabled = useRoomStore((s) => s.loudnessBoostEnabled);
   // Extra mics to stream (separate "mic" producers) + per-device mono/stereo. The
   // reconcile effect below diffs these against the live producers.
   const streamedMicDeviceIds = useRoomStore((s) => s.streamedMicDeviceIds);
@@ -463,6 +464,9 @@ export function useMediasoup() {
     if (!speakerDeviceId && !hasSharedAudioContext()) return;
     applySpeakerToContext(getSharedAudioContext(), speakerDeviceId);
   }, [speakerDeviceId]);
+
+  // Loudness boost reroutes the outgoing graph live; no mic re-acquire needed.
+  useEffect(() => graph.setLoudnessBoost(loudnessBoostEnabled), [graph, loudnessBoostEnabled]);
 
   // Mid-call mic setting change: re-acquire the mic with the selected device
   // and voice-processing preference, then reroute it into the outgoing graph.
