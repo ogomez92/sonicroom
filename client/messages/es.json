@@ -222,6 +222,8 @@
   "announce_a_participant": "Un participante",
   "announce_joined": "{name} ha entrado en la sala",
   "announce_left": "{name} ha salido de la sala",
+  "announce_feedback_ducked": "Micrófono bajado para cortar el acople. Usa auriculares o aléjate de los altavoces.",
+  "announce_feedback_restored": "Nivel del micrófono restablecido.",
   "announce_recording_started": "Grabación iniciada por {name}",
   "announce_recording_stopped": "Grabación detenida: todavía se puede descargar",
   "announce_recording_unavailable": "La grabación ya no está disponible",

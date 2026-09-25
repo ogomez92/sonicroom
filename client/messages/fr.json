@@ -222,6 +222,8 @@
   "announce_a_participant": "Un participant",
   "announce_joined": "{name} a rejoint le salon",
   "announce_left": "{name} a quitté le salon",
+  "announce_feedback_ducked": "Micro baissé pour arrêter l’effet Larsen. Utilisez un casque ou éloignez-vous des haut-parleurs.",
+  "announce_feedback_restored": "Niveau du micro rétabli.",
   "announce_recording_started": "Enregistrement démarré par {name}",
   "announce_recording_stopped": "Enregistrement arrêté — toujours disponible au téléchargement",
   "announce_recording_unavailable": "L'enregistrement n'est plus disponible",
