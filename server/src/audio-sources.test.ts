@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after as afterAll, describe, it } from "node:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { spawn as nodeSpawn } from "node:child_process";
@@ -52,6 +52,11 @@ function makeFakeSpawn() {
   }) as unknown as typeof nodeSpawn;
   return { spawn, procs, calls };
 }
+
+// The resolvers unref() their first-byte timer and the fakes hold no handles, so
+// without this the event loop drains mid-test and node:test cancels the test.
+const keepAlive = setInterval(() => {}, 1000);
+afterAll(() => clearInterval(keepAlive));
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -399,6 +404,31 @@ describe("streamFallbackAudio (routing, backup and concurrency)", () => {
     const extraction = await pending;
     extraction.destroy();
     assert.equal(activeTranscodeCount(), 0);
+  });
+
+  it("retries yt-dlp once for a site before the ffmpeg backup", async () => {
+    const { spawn, procs, calls } = makeFakeSpawn();
+    const pending = streamFallbackAudio(PUBLIC_SITE, { spawn, firstByteTimeoutMs: 5000 });
+    await waitFor(() => procs.length >= 2);
+    procs[1].emit("close", 1); // first yt-dlp pipeline fails (transient)
+    await waitFor(() => procs.length >= 4);
+    assert.equal(calls[2].cmd, "yt-dlp");
+    await tick();
+    procs[3].stdout.write(Buffer.from([1])); // retry produces audio
+    const extraction = await pending;
+    extraction.destroy();
+    assert.equal(activeTranscodeCount(), 0);
+  });
+
+  it("reports yt-dlp's error, not ffmpeg's empty-input noise", async () => {
+    const { spawn, procs } = makeFakeSpawn();
+    const pending = streamAudioWithYtDlp(PUBLIC_SITE, { spawn, firstByteTimeoutMs: 5000 });
+    await waitFor(() => procs.length >= 2);
+    procs[0].stderr.write("ERROR: [youtube] abc: HTTP Error 403: Forbidden\n");
+    procs[1].stderr.write("Error opening input files: Invalid data found when processing input\n");
+    await tick();
+    procs[1].emit("close", 1);
+    await assert.rejects(pending, /ERROR: \[youtube\] abc: HTTP Error 403/);
   });
 
   it("rejects with the primary error when both resolvers fail", async () => {

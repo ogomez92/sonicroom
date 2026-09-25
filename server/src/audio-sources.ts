@@ -435,12 +435,14 @@ async function gateTranscodedAudio(
   } catch (err) {
     clearTimeout(timer);
     destroy();
-    const detail = readDiagnostics()
+    const lines = readDiagnostics()
       .trim()
       .split("\n")
       .map((line) => line.trim())
-      .filter(Boolean)
-      .pop();
+      .filter(Boolean);
+    // Prefer yt-dlp's own error: when it fails, the downstream ffmpeg's
+    // "Invalid data found" on the empty pipe is printed last and hides the cause.
+    const detail = lines.filter((line) => line.startsWith("ERROR:")).pop() ?? lines.pop();
     throw new Error(
       detail
         ? `audio extraction failed: ${detail}`
@@ -554,19 +556,23 @@ export async function streamFallbackAudio(
   };
 
   const direct = options.preferFfmpeg === true || looksLikeDirectStream(raw);
-  const primary = direct ? streamAudioWithFfmpeg : streamAudioWithYtDlp;
-  const backup = direct ? streamAudioWithYtDlp : streamAudioWithFfmpeg;
+  // Sites get a second yt-dlp attempt: YouTube intermittently fails a single
+  // extraction (e.g. a 403 on the media URL) that works on the next try.
+  const attempts = direct
+    ? [streamAudioWithFfmpeg, streamAudioWithYtDlp]
+    : [streamAudioWithYtDlp, streamAudioWithYtDlp, streamAudioWithFfmpeg];
   try {
-    let extraction: YtDlpExtraction;
-    try {
-      extraction = await primary(raw, options);
-    } catch (primaryErr) {
+    let extraction: YtDlpExtraction | undefined;
+    let primaryErr: unknown;
+    for (const attempt of attempts) {
       try {
-        extraction = await backup(raw, options);
-      } catch {
-        throw primaryErr;
+        extraction = await attempt(raw, options);
+        break;
+      } catch (err) {
+        primaryErr ??= err;
       }
     }
+    if (!extraction) throw primaryErr;
     // Free the slot when the consumer tears the stream down (response close).
     return {
       ...extraction,
