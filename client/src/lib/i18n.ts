@@ -14,6 +14,7 @@ export const LOCALE_NAMES: Record<Locale, string> = {
   en: "English",
   es: "Español",
   fr: "Français",
+  sk: "Slovenčina",
 };
 
 // Apply a `?lang=` override up front. reload:false because React re-renders in

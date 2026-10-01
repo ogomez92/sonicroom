@@ -1,0 +1,1542 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="sk" xml:lang="sk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc 3.11" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Používanie SonicRoom s čítačom obrazovky</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: 1.5em;}
+    div.column{flex: auto;}
+    @media screen {
+    div.columns{gap: min(4vw, 1.5em);}
+    div.column{overflow-x: auto;}
+    }
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+  </style>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #16181d;
+      --muted: #4a4f5a;
+      --accent: #1451b4;
+      --accent-fg: #ffffff;
+      --rule: #c9ced8;
+      --panel: #f1f3f7;
+      --code-bg: #eceff4;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1116;
+        --fg: #eceff4;
+        --muted: #b3bac6;
+        --accent: #7ab5ff;
+        --accent-fg: #0f1116;
+        --rule: #3a4150;
+        --panel: #191d25;
+        --code-bg: #232833;
+      }
+    }
+
+    html {
+      font-size: 112.5%;
+      /* Painted on <html> as well as <body> so the gutters either side of the
+         centred column match the page rather than showing the UA canvas. */
+      background: var(--bg);
+      color: var(--fg);
+    }
+    body {
+      margin: 0 auto;
+      padding: 2rem 1.25rem 6rem;
+      max-width: 46rem;
+      background: var(--bg);
+      color: var(--fg);
+      font-family:
+        system-ui,
+        -apple-system,
+        "Segoe UI",
+        Roboto,
+        sans-serif;
+      line-height: 1.65;
+      overflow-wrap: break-word;
+    }
+
+    a {
+      color: var(--accent);
+    }
+    a:focus-visible,
+    :focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+
+    header#title-block-header {
+      border-bottom: 2px solid var(--rule);
+      padding-bottom: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    h1.title {
+      font-size: 1.9rem;
+      line-height: 1.25;
+      margin: 0 0 0.35rem;
+    }
+    p.subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.05rem;
+      font-weight: 400;
+    }
+
+    h1,
+    h2,
+    h3 {
+      line-height: 1.25;
+      margin: 2.25rem 0 0.75rem;
+    }
+    h1 {
+      font-size: 1.6rem;
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 0.35rem;
+    }
+    h2 {
+      font-size: 1.25rem;
+    }
+    h3 {
+      font-size: 1.08rem;
+    }
+
+    nav#TOC {
+      background: var(--panel);
+      border: 1px solid var(--rule);
+      border-radius: 0.6rem;
+      padding: 1rem 1.25rem;
+      margin-bottom: 2rem;
+    }
+    nav#TOC h2 {
+      margin-top: 0;
+      font-size: 1.1rem;
+    }
+    nav#TOC ul {
+      padding-left: 1.2rem;
+      margin-bottom: 0;
+    }
+    nav#TOC li {
+      margin: 0.2rem 0;
+    }
+
+    .manual-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.25rem;
+      align-items: baseline;
+      border-bottom: 1px solid var(--rule);
+      padding-bottom: 0.9rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.95rem;
+    }
+    .manual-nav strong {
+      font-weight: 600;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 1rem 0 1.5rem;
+      font-size: 0.98rem;
+    }
+    caption {
+      text-align: left;
+      color: var(--muted);
+      padding-bottom: 0.35rem;
+    }
+    th,
+    td {
+      border: 1px solid var(--rule);
+      padding: 0.5rem 0.65rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    thead th {
+      background: var(--panel);
+    }
+    tbody tr:nth-child(even) td {
+      background: color-mix(in srgb, var(--panel) 55%, transparent);
+    }
+    code {
+      background: var(--code-bg);
+      padding: 0.1em 0.35em;
+      border-radius: 0.25rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--rule);
+      border-radius: 0.5rem;
+      padding: 0.85rem 1rem;
+      overflow-x: auto;
+    }
+    pre code {
+      background: none;
+      padding: 0;
+    }
+
+    blockquote {
+      margin: 1rem 0;
+      padding: 0.5rem 1rem;
+      border-left: 4px solid var(--accent);
+      background: var(--panel);
+      color: var(--fg);
+    }
+    blockquote p {
+      margin: 0.25rem 0;
+    }
+
+    hr {
+      border: 0;
+      border-top: 1px solid var(--rule);
+      margin: 2.5rem 0;
+    }
+
+    ol,
+    ul {
+      padding-left: 1.4rem;
+    }
+    li {
+      margin: 0.3rem 0;
+    }
+
+    @media print {
+      body {
+        max-width: none;
+      }
+      nav#TOC,
+      .manual-nav {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+<nav class="manual-nav" aria-label="Navigácia v manuály">
+  <a href="/">Späť do SonicRoom</a>
+  <span><strong>Ďalšie jazyky:</strong>
+    <a href="./en.html" hreflang="en" lang="en">English</a>
+    <a href="./es.html" hreflang="es" lang="es">Español</a>
+    <a href="./fr.html" hreflang="fr" lang="fr">Français</a>
+  </span>
+</nav>
+<header id="title-block-header">
+<h1 class="title">Používanie SonicRoom s čítačom obrazovky</h1>
+<p class="subtitle">Ako si nastaviť čítač obrazovky, ako funguje
+klávesnica a všetky klávesové skratky</p>
+</header>
+<nav id="TOC" role="doc-toc">
+<h2 id="toc-title">Obsah</h2>
+<ul>
+<li><a href="#najprv-si-prečítajte-túto-časť"
+id="toc-najprv-si-prečítajte-túto-časť">Najprv si prečítajte túto
+časť</a></li>
+<li><a href="#nastavenie-čítača-obrazovky"
+id="toc-nastavenie-čítača-obrazovky">Nastavenie čítača obrazovky</a>
+<ul>
+<li><a href="#nvda" id="toc-nvda">NVDA</a></li>
+<li><a href="#jaws" id="toc-jaws">JAWS</a></li>
+<li><a href="#narrator-windows" id="toc-narrator-windows">Narrator
+(Windows)</a></li>
+<li><a href="#voiceover-macos" id="toc-voiceover-macos">VoiceOver
+(macOS)</a></li>
+<li><a href="#orca-linux" id="toc-orca-linux">Orca (Linux)</a></li>
+<li><a href="#iphone-ipad-a-android"
+id="toc-iphone-ipad-a-android">iPhone, iPad a Android</a></li>
+<li><a href="#desaťsekundový-test-že-máte-všetko-správne-nastavené"
+id="toc-desaťsekundový-test-že-máte-všetko-správne-nastavené">Desaťsekundový
+test, že máte všetko správne nastavené</a></li>
+</ul></li>
+<li><a href="#ako-funguje-klávesnica-všade-v-sonicroom"
+id="toc-ako-funguje-klávesnica-všade-v-sonicroom">Ako funguje klávesnica
+všade v SonicRoom</a></li>
+<li><a href="#recepcia" id="toc-recepcia">Recepcia</a></li>
+<li><a href="#miestnosť-po-častiach"
+id="toc-miestnosť-po-častiach">Miestnosť po častiach</a>
+<ul>
+<li><a href="#hlavička" id="toc-hlavička">Hlavička</a></li>
+<li><a href="#zoznam-používateľov" id="toc-zoznam-používateľov">Zoznam
+používateľov</a></li>
+<li><a href="#možnosti-používateľa"
+id="toc-možnosti-používateľa">Možnosti používateľa</a></li>
+<li><a href="#panel-textovej-diskusie"
+id="toc-panel-textovej-diskusie">Panel textovej diskusie</a></li>
+<li><a href="#panel-nástrojov-ovládacie-prvky-zvuku"
+id="toc-panel-nástrojov-ovládacie-prvky-zvuku">Panel nástrojov
+<em>Ovládacie prvky zvuku</em></a></li>
+<li><a href="#pätička" id="toc-pätička">Pätička</a></li>
+</ul></li>
+<li><a href="#všetky-klávesové-skratky"
+id="toc-všetky-klávesové-skratky">Všetky klávesové skratky</a>
+<ul>
+<li><a href="#jednotlivé-písmená" id="toc-jednotlivé-písmená">Jednotlivé
+písmená</a></li>
+<li><a href="#s-klávesom-alt" id="toc-s-klávesom-alt">S klávesom
+Alt</a></li>
+<li><a href="#navigácia-a-zatváranie"
+id="toc-navigácia-a-zatváranie">Navigácia a zatváranie</a></li>
+</ul></li>
+<li><a href="#počúvať-čo-sa-deje" id="toc-počúvať-čo-sa-deje">Počúvať,
+čo sa deje</a></li>
+<li><a href="#rozprávanie-a-počúvanie"
+id="toc-rozprávanie-a-počúvanie">Rozprávanie a počúvanie</a></li>
+<li><a href="#zdieľanie-zvuku-do-miestnosti"
+id="toc-zdieľanie-zvuku-do-miestnosti">Zdieľanie zvuku do miestnosti</a>
+<ul>
+<li><a href="#zvuk-obrazovky-alebo-karty-a"
+id="toc-zvuk-obrazovky-alebo-karty-a">Zvuk obrazovky alebo karty
+(<code>A</code>)</a></li>
+<li><a href="#prehrávanie-súboru-odkazu-alebo-súboru-na-serveri-f"
+id="toc-prehrávanie-súboru-odkazu-alebo-súboru-na-serveri-f">Prehrávanie
+súboru, odkazu alebo súboru na serveri (<code>F</code>)</a></li>
+</ul></li>
+<li><a href="#nahrávanie-a-živé-vysielanie"
+id="toc-nahrávanie-a-živé-vysielanie">Nahrávanie a živé
+vysielanie</a></li>
+<li><a href="#videohovory" id="toc-videohovory">Videohovory</a></li>
+<li><a href="#verejné-miestnosti-vstupovanie-a-hlasovanie"
+id="toc-verejné-miestnosti-vstupovanie-a-hlasovanie">Verejné miestnosti,
+vstupovanie a hlasovanie</a></li>
+<li><a href="#moderované-miestnosti-so-správcami"
+id="toc-moderované-miestnosti-so-správcami">Moderované miestnosti (so
+správcami)</a>
+<ul>
+<li><a href="#rezervované-miestnosti-miestnosť-pridelená-vopred"
+id="toc-rezervované-miestnosti-miestnosť-pridelená-vopred">Rezervované
+miestnosti (miestnosť pridelená vopred)</a></li>
+</ul></li>
+<li><a href="#spoločné-poznámky" id="toc-spoločné-poznámky">Spoločné
+poznámky</a></li>
+<li><a href="#voľby-ktoré-môžete-zadať-do-panelu-s-adresou"
+id="toc-voľby-ktoré-môžete-zadať-do-panelu-s-adresou">Voľby, ktoré
+môžete zadať do panelu s adresou</a></li>
+<li><a href="#keď-niečo-nefunguje" id="toc-keď-niečo-nefunguje">Keď
+niečo nefunguje</a></li>
+<li><a href="#jednostranový-prehľad-klávesov"
+id="toc-jednostranový-prehľad-klávesov">Jednostranový prehľad
+klávesov</a></li>
+</ul>
+</nav>
+<h1 id="najprv-si-prečítajte-túto-časť">Najprv si prečítajte túto
+časť</h1>
+<p><strong>SonicRoom je aplikácia, nie webová stránka.</strong></p>
+<p>Táto jediná veta vysvetľuje takmer všetky problémy, na ktoré ľudia
+narážajú. SonicRoom síce beží v prehliadači, ale nič v ňom sa nespráva
+ako článok, aký bežne čítate. Nie je tu dokument, po ktorom by ste sa
+posúvali. Sú tu panely nástrojov, zoznamy a dialógové okná a ovládajú sa
+tak, ako sa ovládajú klasické aplikácie určené pre počítač:
+<strong>Stlačením klávesu Tab sa presúvate medzi jednotlivými časťami,
+šípky sa používajú na pohyb vnútri časti</strong>.</p>
+<p>Čítače obrazovky to samy od seba nevedia. Vo východiskovom nastavení
+vám NVDA, JAWS, Narrator aj Orca predkladajú <em>virtuálnu kópiu</em>
+stránky a zachytávajú vaše klávesy, takže <code>H</code> skočí na nadpis
+a <code>B</code> na tlačidlo. Na spravodajskom webe je to presne tak,
+ako to má byť, no tu je to presne nesprávne, pretože v SonicRoom
+<code>M</code> stlmí váš mikrofón, <code>R</code> spustí nahrávanie a
+<code>W</code> povie, kto práve hovoril. Ak čítač obrazovky tieto
+klávesy pohltí, do aplikácie sa nikdy nedostanú.</p>
+<p>Preto prvá vec, ktorú treba urobiť — ešte predtým, než sa k
+čomukoľvek pripojíte — je prepnúť čítač obrazovky do režimu, v ktorom
+aplikácia dostáva vaše stlačenia klávesov. Každý čítač obrazovky ho
+nazýva inak. Nasledujúca časť vám povie, ako na to.</p>
+<p>Ak si zapamätáte len jedno: <strong>keď jediné písmeno nerobí nič,
+ste v nesprávnom režime.</strong></p>
+<hr />
+<h1 id="nastavenie-čítača-obrazovky">Nastavenie čítača obrazovky</h1>
+<h2 id="nvda">NVDA</h2>
+<p>NVDA pozná dva režimy: <strong>režim prehliadania</strong> (browse
+mode) a <strong>režim fokusu</strong> (focus mode).</p>
+<ul>
+<li>Režim prehliadania je režim čítania. Jednotlivé písmená sú navigačné
+príkazy a na stránku sa nikdy nedostanú.</li>
+<li>Režim formulára posiela každé stlačenie klávesu priamo do aplikácie.
+Tento režim SonicRoom potrebuje.</li>
+</ul>
+<p><strong>Prepínate ho skratkou <code>NVDA</code> +
+<code>Medzerník</code>.</strong> Keď sa režim formulára zapne, začujete
+krátky nízky zvuk a pri návrate do režimu prehliadania vyšší. Niektoré
+hlasy tiež nahlas povedia „režim fokusu“ a „režim prehliadania“.</p>
+<p>NVDA sa do režimu fokusu prepne automaticky vždy, keď sa dostanete na
+textové pole alebo podobný ovládací prvok, takže v ňom často budete, aj
+keď oň nepožiadate. Čo sa však neurobí automaticky, je prepnutie, keď
+stojíte na obyčajnom tlačidle — a práve vtedy chcete stlačiť niektorú
+skratku Sonic room ako sú <code>M</code> alebo <code>R</code>. Stlačte
+<code>NVDA</code> + <code>Medzerník</code> a zostaňte v režime fokusu
+počas celého hovoru.</p>
+<p>Ak chcete, aby bolo automatické prepínanie NVDA voľnejšie, otvorte
+<strong>ponuku NVDA → Možnosti → Nastavenia → Režim
+prehliadania</strong> (alebo stlačte <code>NVDA</code> +
+<code>Ctrl</code> + <code>B</code>) a zapnite možnosti <em>Automaticky
+aktivovať režim fokusu pri zmene fokusu</em> a <em>Automaticky aktivovať
+režim fokusu pri pohybe kurzorom</em>.</p>
+<h2 id="jaws">JAWS</h2>
+<p>JAWS nazýva svoj režim čítania <strong>virtuálny kurzor</strong>
+(Virtual Cursor, niekedy „PC virtual cursor“) a svoj priamy režim
+<strong>režim formulára</strong> (Forms Mode).</p>
+<p><strong>Pre SonicRoom odporúčame virtuálny kurzor úplne vypnúť:
+stlačte <code>Kláves JAWS</code> + <code>Z</code></strong> (klávesom
+JAWS je predvolene <code>Insert</code>, v rozložení pre notebook
+<code>Caps Lock</code>). JAWS oznámi „Virtuálny kurzor vypnutý“. Od tej
+chvíle putuje každý stlačený kláves do SonicRoom.</p>
+<p>Môžete sa <em>spoliehať</em> aj na automatický režim formulára — JAWS
+do režimu formulára prejde, keď na ovládacom prvku stlačíte
+<code>Enter</code>, a opustí ho klávesom <code>NumPad Plus</code>.
+Funguje to, ale tu vám to robí problémy z dvoch dôvodov: jednopísmenové
+príkazy SonicRoom nie sú pripojené k prvkom formulára, takže pre ne sa
+automatický režim formulárov nespustí; a SonicRoom používa kláves
+<code>Escape</code> na skutočnú prácu (zatvorenie panela textovej
+diskusie, zatvorenie dialógového okna, zastavenie prehrávaného súboru),
+ktorý môže režim formulára zadržať.</p>
+<p>Vypnutie virtuálneho kurzora pomocou <code>Kláves JAWS</code> +
+<code>Z</code> sa vyhne obom problémom. Keď z hovoru odídete, rovnakou
+skratkou virtuálny kurzor aktivujete naspäť.</p>
+<h2 id="narrator-windows">Narrator (Windows)</h2>
+<p>Narrator nazýva svoj režim čítania <strong>režim skenovania</strong>
+(Scan Mode). <strong>Vypnite</strong> ho skratkou <code>Caps Lock</code>
++ <code>Medzerník</code>. Narrator oznámi „Scan off“. Keď je režim
+skenovania vypnutý, <code>Tab</code> a šípky sa správajú tak, ako
+opisuje táto príručka, a jednotlivé písmená sa dostanú do aplikácie.</p>
+<h2 id="voiceover-macos">VoiceOver (macOS)</h2>
+<p>Podobnou pascou vo VoiceOveri je <strong>Quick Nav</strong>. Keď je
+Quick Nav zapnutý, šípky sú navigačné príkazy VoiceOveru a na stránku sa
+nikdy nedostanú.</p>
+<p><strong>Quick Nav vypnete súčasným stlačením šípok doľava a
+doprava.</strong> VoiceOver oznámi „Quick Nav off“.</p>
+<p>Potom platí:</p>
+<ul>
+<li><code>Tab</code> a <code>Shift</code> + <code>Tab</code> sa
+presúvajú medzi časťami aplikácie.</li>
+<li>Šípky sa pohybujú vnútri panela nástrojov alebo zoznamu, ako je
+opísané nižšie.</li>
+<li>Jednotlivé písmená (<code>M</code>, <code>A</code>, <code>R</code>,
+<code>W</code>…) sa dostanú do aplikácie SonicRoom, pokiaľ nie je
+zamerané textové pole.</li>
+</ul>
+<p><code>VO</code> v skratkách opísaných v nasledujúcich odsekoch nižšie
+znamená <code>Control</code> + <code>Option</code>. Možno budete musieť
+použiť <code>VO</code> + <code>Shift</code> + <code>šípka nadol</code>,
+aby ste vstúpili do skupiny webového obsahu, kým VoiceOver nasleduje
+fokus aplikácie.</p>
+<h2 id="orca-linux">Orca (Linux)</h2>
+<p>Orca má pri webovom obsahu podobne ako NVDA <strong>režim
+prehliadania</strong> a <strong>režim zameriavania</strong>. Na
+ovládacích prvkoch formulára Orca prepína do režimu zameriavania
+automaticky; na ručné prepnutie stlačte <code>Orca</code> +
+<code>A</code> (modifikátorom Orca je <code>Insert</code> v rozložení
+pre stolový počítač a <code>Caps Lock</code> v rozložení pre
+notebook).</p>
+<h2 id="iphone-ipad-a-android">iPhone, iPad a Android</h2>
+<p>SonicRoom funguje s čítačmi obrazovky VoiceOver, TalkBack a ostatnými
+na mobilných zariadeniach a každé tlačidlo v aplikácii SonicRoom, zoznam
+a dialóg majú výstižný textový popis. Jednoznakové klávesové skratky
+vyžadujú fyzickú klávesnicu, takže na dotykovej obrazovke používajte
+tlačidlá — všetko, čo ponúkajú klávesové skratky, je možné vyvolať aj
+zodpovedajúcim tlačidlom niekde na paneli nástrojov alebo v zozname
+používateľov.</p>
+<p>V systéme iOS sa dve veci správajú inak: Safari nevie zobraziť video
+na celú obrazovku (aplikácia to povie nahlas namiesto toho, aby
+ponechala nefunkčné tlačidlo) a zvukový modul sa spustí až po tom, čo sa
+raz dotknete obrazovky, čo SonicRoom pri vašom prvom ťuknutí vybaví za
+vás.</p>
+<h2
+id="desaťsekundový-test-že-máte-všetko-správne-nastavené">Desaťsekundový
+test, že máte všetko správne nastavené</h2>
+<p>Pripojte sa do miestnosti sami, uistite sa, že <strong>nie
+je</strong> zamerané vstupné pole v textovej diskusii, a stlačte
+<code>M</code>. Ak začujete zvuk stlmenia a „Mikrofón stlmený“, ste
+pripravení. Ak čítač obrazovky povie niečo o nadpise, zozname alebo
+„žiadny nasledujúci prvok“, stále ste v režime čítania — vráťte sa a
+prepnite čítač do správneho režimu.</p>
+<hr />
+<h1 id="ako-funguje-klávesnica-všade-v-sonicroom">Ako funguje klávesnica
+všade v SonicRoom</h1>
+<p>Celú aplikáciu pokrývajú tri pravidlá.</p>
+<p><strong>1. <code>Tab</code> sa presúva medzi časťami. Šípky sa
+pohybujú vnútri časti.</strong></p>
+<p>Panel nástrojov s jedenástimi tlačidlami je <em>jedno</em> zastavenie
+klávesu <code>Tab</code>, nie jedenásť. Zoznam dvadsiatich používateľov
+je tiež len jedno zastavenie klávesu <code>Tab</code>. Je to zámer:
+celou aplikáciou prejdete päť či šesť stlačeniami <code>Tab</code>
+namiesto štyridsiatich a presne tak fungujú desktopové aplikácie
+odjakživa. Zároveň to znamená, že stlačenie <code>Tab</code> vnútri
+panela nástrojov vás <strong>nepresunie</strong> na ďalšie tlačidlo — to
+urobí <code>šípka doprava</code>.</p>
+<p><strong>2. Panely nástrojov: <code>šípka doľava</code> a
+<code>šípka doprava</code>.</strong></p>
+<p>SonicRoom má dva panely nástrojov, oba v dolnej časti hovoru:
+ovládanie zvuku (vždy) a ovládanie videa (len vo videohovoroch). V
+ktoromkoľvek z nich platí:</p>
+<table>
+<colgroup>
+<col style="width: 32%" />
+<col style="width: 67%" />
+</colgroup>
+<thead>
+<tr>
+<th>Kláves</th>
+<th>Čo robí</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Šípka doprava</code></td>
+<td>Ďalšie tlačidlo (z posledného cyklicky prechádza späť na prvé)</td>
+</tr>
+<tr>
+<td><code>Šípka doľava</code></td>
+<td>Predchádzajúce tlačidlo (z prvého cyklicky prechádza na
+posledné)</td>
+</tr>
+<tr>
+<td><code>Home</code></td>
+<td>Prvé tlačidlo</td>
+</tr>
+<tr>
+<td><code>End</code></td>
+<td>Posledné tlačidlo</td>
+</tr>
+<tr>
+<td><code>Enter</code> alebo <code>Medzerník</code></td>
+<td>Stlačí tlačidlo, na ktorom stojíte</td>
+</tr>
+<tr>
+<td><code>Tab</code></td>
+<td>Úplne opustí panel nástrojov</td>
+</tr>
+</tbody>
+</table>
+<p><strong>3. Zoznamy: <code>šípka nahor</code> a
+<code>šípka nadol</code>, potom <code>Enter</code>.</strong></p>
+<p>Zoznam používateľov, história textovej diskusie, zoznam verejných
+miestností na recepcii a prehliadač súborov na serveri sú všetko zoznamy
+v rovnakom štýle:</p>
+<table>
+<colgroup>
+<col style="width: 28%" />
+<col style="width: 71%" />
+</colgroup>
+<thead>
+<tr>
+<th>Kláves</th>
+<th>Čo robí</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Šípka nadol</code> / <code>Šípka nahor</code></td>
+<td>Ďalšia / predchádzajúca položka</td>
+</tr>
+<tr>
+<td><code>Home</code> / <code>End</code></td>
+<td>Prvá / posledná položka</td>
+</tr>
+<tr>
+<td><code>Enter</code> alebo <code>Medzerník</code></td>
+<td>Otvorí alebo aktivuje položku</td>
+</tr>
+<tr>
+<td><code>Escape</code> alebo <code>Backspace</code></td>
+<td>O úroveň späť (v možnostiach používateľa a v prehliadači
+súborov)</td>
+</tr>
+</tbody>
+</table>
+<p>Čítač obrazovky oznámi každú položku, keď na ňu prejdete šípkou,
+spolu s jej stavom — stlmený, hovorí, zdieľa video a podobne.</p>
+<p><strong>Posuvníky</strong> (úroveň vášho mikrofónu, hlasitosť inej
+osoby) sa nachádzajú v zozname možností používateľa. Na posuvníku
+<code>šípka doľava</code> a <code>šípka doprava</code> menia hodnotu a
+vyslovia novú percentuálnu hodnotu; <code>Home</code> a <code>End</code>
+skočia na minimum a maximum. <code>Šípka nahor</code> a
+<code>šípka nadol</code> si ponechávajú obvyklú úlohu — presun na ďalšiu
+možnosť.</p>
+<p><strong><code>Escape</code> zatvára.</strong> Panel textovej
+diskusie, nastavenia zvuku, nastavenia vysielania, výber zdroja zvuku,
+pole kľúča API, prehrávač súborov aj video na celú obrazovku sa
+zatvárajú klávesom <code>Escape</code> a fokus sa vráti na ovládací
+prvok, ktorým ste ich otvorili. Jedinou výnimkou je dialóg „niekto žiada
+o vstup“, na ktorý musíte odpovedať.</p>
+<hr />
+<h1 id="recepcia">Recepcia</h1>
+<p>Recepcia je prvá obrazovka aplikácie. Je to obyčajný formulár, takže
+ju môžete pokojne čítať v režime prehliadania, ak chcete — no zoznam
+verejných miestností sa obsluhuje šípkami, takže režim formulára je aj
+tak pohodlnejší.</p>
+<p>Postupne zhora nadol:</p>
+<ol type="1">
+<li><strong>Jazyk</strong> — rozbaľovací zoznam. Jeho zmena okamžite
+zmení všetky popisy, na recepcii aj v hovore, bez opätovného
+načítania.</li>
+<li><strong>Názov miestnosti</strong> — písmená, číslice, spojovníky a
+podčiarkovníky, najviac 64 znakov. Čokoľvek iné sa pri písaní odstráni.
+Ak v miestnosti s týmto názvom ešte nikto nie je, jeho napísaním ju
+vytvoríte.</li>
+<li><strong>Typ miestnosti</strong> — dva prepínače, <strong>Hlasový
+hovor</strong> a <strong>Videohovor</strong>. Predvolený je vždy hlasový
+hovor. Vyberáte šípkami. Toto rozhodnutie je trvalé počas celej
+existencie miestnosti a určuje, či kamery vôbec existujú.</li>
+<li><strong>Pozadie videa</strong> — zobrazí sa, len ak ste zvolili
+<em>Videohovor</em>. Pozri <a href="#videohovory">Videohovory</a>.</li>
+<li><strong>Zobrazované meno</strong> — meno, ktoré všetci začujú, keď
+sa pripojíte, prehovoríte alebo pošlete správu.</li>
+<li><strong>Verejné miestnosti</strong> — zoznam miestností, ktoré sú
+práve otvorené pre každého, s uvedením, kto v nich je. Zobrazuje sa, len
+ak aspoň jedna existuje. Šípkami prejdite na miestnosť a stlačte
+<code>Enter</code>, čím sa jej názov vyplní za vás; fokus sa vráti na
+Zobrazované meno, takže už len napíšete svoje meno.</li>
+<li><strong>Úroveň mikrofónu</strong> — tlačidlo <strong>Test</strong>,
+posuvník <strong>Úroveň mikrofónu</strong> a aktualizujúci sa indikátor
+úrovne. Po stlačení Test sa budete počuť (použite slúchadlá) a čítač
+obrazovky vám povie, keď sa úroveň posunie medzi hodnotami
+<em>ticho</em>, <em>nízka</em>, <em>dobrá</em> a <em>vysoká</em>.
+Posuvník zvyšujte, kým nepovie dobrá. Táto úroveň sa prenesie do hovoru.
+Oplatí sa to urobiť raz — mnohé mikrofóny v notebookoch sú v predvolenom
+stave príliš tiché.</li>
+<li><strong>Zakázať režim P2P</strong> — začiarkavacie políčko. Pri
+dvoch ľuďoch vás SonicRoom bežne spojí priamo medzi sebou. Zaškrtnutím
+sa vždy použije sprostredkovanie cez server. Väčšina ľudí to nikdy
+nepotrebuje.</li>
+<li><strong>Zverejniť túto miestnosť</strong> — začiarkavacie políčko.
+Miestnosť sa zverejní a zapnú sa pravidlá pre vstup a hlasovanie o
+odstránení používateľa, opísané ďalej. Keď miestnosť raz niekto
+zverejní, zostane verejná, kým z nej neodídu všetci; neskoršie zrušenie
+zaškrtnutia to neovplyvní.</li>
+<li><strong>Vstúpiť bez mikrofónu</strong> — Začiarkavacie políčko.
+Môžete počúvať a používať textovú diskusiu a prehliadač nikdy nepožiada
+o povolenie mikrofónu. Ak mikrofón nemáte alebo žiadosť o povolenie
+odmietnete, v tomto režime skončíte tak či tak.</li>
+<li><strong>Vstúpiť do miestnosti</strong> — predvolené tlačidlo
+formulára. Funguje aj <code>Enter</code> z ktoréhokoľvek textového
+poľa.</li>
+</ol>
+<hr />
+<h1 id="miestnosť-po-častiach">Miestnosť po častiach</h1>
+<h2 id="hlavička">Hlavička</h2>
+<p>Číta názov miestnosti a názov tejto inštancie SonicRoom, potom
+prípadné značky — <strong>VIDEO</strong> pre videohovor,
+<strong>REC</strong> počas nahrávania hovoru, <strong>LIVE</strong>
+počas jeho vysielania — potom počet pripojených používateľov, potom
+tlačidlo <strong>Otvoriť textovú diskusiu</strong> (ktoré má v názve aj
+počet neprečítaných správ) a nakoniec rozbaľovací zoznam jazyka.</p>
+<h2 id="zoznam-používateľov">Zoznam používateľov</h2>
+<p>Srdce aplikácie. Je to jeden zoznam, ktorý obsahuje <strong>najprv
+vás, potom všetkých ostatných</strong> a potom jeden riadok za každú
+ďalšiu vec, ktorá sa do miestnosti vysiela: prehrávanie hudby, zvuk
+zdieľanej obrazovky, súbor, ktorý niekto streamuje, ďalší mikrofón.</p>
+<p>Každý riadok sa číta ako meno osoby a potom všetko, čo práve platí,
+napríklad:</p>
+<blockquote>
+<p>Ana (vy), stlmená, zdieľa video, stlačte Enter pre otvorenie možností
+tohto používateľa</p>
+</blockquote>
+<p>Môžete počuť tieto údaje: <em>vy</em>, <em>len text</em> (pripojený
+bez mikrofónu), <em>stlmený</em>, <em>hovorí</em>, <em>zdieľa
+video</em>, <em>zdieľa obrazovku</em>, <em>pripnutý</em>, <em>stlmený
+vami</em> a počet hlasov, ak práve prebieha hlasovanie o odstránení
+daného používateľa.</p>
+<p>Stlačením <code>Enter</code> na riadku otvoríte možnosti používateľa.
+Tým sa zoznam nahradí druhým zoznamom a <code>Escape</code> alebo
+<code>Backspace</code> vás vráti späť.</p>
+<h2 id="možnosti-používateľa">Možnosti používateľa</h2>
+<p>Čo tu nájdete, závisí od toho, akú položku v zozname používateľov ste
+otvorili.</p>
+<p><strong>Pre samého seba:</strong></p>
+<ul>
+<li><strong>Úroveň vášho mikrofónu</strong> — posuvník.
+<code>Doľava</code>/<code>doprava</code> mení hodnotu,
+<code>Home</code>/<code>End</code> skáču na minimum a maximum. Je to
+zosilnenie použité predtým, než váš hlas opustí váš počítač, takže mení
+to, čo počujú všetci.</li>
+<li><strong>Opísať moje video</strong> a <strong>Pripnúť moje
+video</strong> — len vo videohovoroch.</li>
+</ul>
+<p><strong>Pre iného používateľa:</strong></p>
+<ul>
+<li><strong>Hlasitosť pre <em>meno</em></strong> — posuvník. Mení len
+to, čo počujete <em>vy</em>.</li>
+<li><strong>Stlmiť <em>meno</em> pre mňa</strong> / <strong>Zrušiť
+stlmenie <em>meno</em> pre mňa</strong> — umlčí používateľa len pre vás.
+Stlmený používateľ nie je o tom informovaný. Popis tohoto tlačidla sa
+aktualizuje tak, aby informoval, čo sa stane pri najbližšom
+stlačení.</li>
+<li><strong>Pripnúť video používateľa <em>meno</em></strong> /
+<strong>Pripnúť obrazovku používateľa <em>meno</em></strong> — len vo
+videohovoroch a ide výlučne o zmenu na vašej vlastnej obrazovke;
+pripnutý používateľ sa to nikdy nedozvie.</li>
+<li><strong>Opísať video osoby <em>meno</em></strong> / <strong>Opísať
+obrazovku osoby <em>meno</em></strong> — len vo videohovoroch. Pozri <a
+href="#videohovory">Videohovory</a>.</li>
+<li><strong>Odstrániť používateľa <em>meno</em></strong> — len vo
+verejných miestnostiach s tromi alebo viacerými ľuďmi. Pozri <a
+href="#verejné-miestnosti-vstupovanie-a-hlasovanie">Verejné miestnosti,
+vstupovanie a hlasovanie</a>.</li>
+<li><strong>Odstrániť prehrávanie</strong> — odstráni zdroj prehrávania
+hudby.</li>
+<li><strong>Zastaviť tento stream</strong> — zastaví jeden zdieľaný
+súbor, zvuk zdieľanej obrazovky alebo ďalší mikrofón.</li>
+</ul>
+<h2 id="panel-textovej-diskusie">Panel textovej diskusie</h2>
+<p>Otvoríte ho tlačidlom Otvoriť textovú diskusiu v hlavičke miestnosti.
+Panel je zámerne usporiadaný tak, že <strong>najprv je história správ,
+potom textové pole určené na písanie správy</strong>, aby ste sa
+zamerali na to, čo práve odznelo, a nie na prázdne textové pole.</p>
+<ul>
+<li>Zoznam správ je zoznam: Šípky <code>hore</code>/<code>dolu</code>,
+<code>Home</code>/<code>End</code>.</li>
+<li><code>Ctrl</code> + <code>C</code> (alebo <code>Cmd</code> +
+<code>C</code>) na správe ju skopíruje.</li>
+<li>V poli správy <code>Enter</code> odošle a <code>Shift</code> +
+<code>Enter</code> začne nový riadok.</li>
+<li><strong>Oznamovať nové správy</strong> je rozbaľovací zoznam v
+hlavičke panela so štyrmi nastaveniami: <em>Zdvorilo</em> (vysloví sa,
+keď čítač obrazovky nabudúce urobí pauzu), <em>Naliehavo</em> (preruší),
+<em>Nahlas</em> (vlastný hlas prehliadača, pre ľudí, ktorí nepoužívajú
+čítač obrazovky) a <em>Vypnuté</em>.</li>
+<li><code>Escape</code> zatvorí panel a vráti fokus na tlačidlo textovej
+diskusie.</li>
+</ul>
+<p>Panel nemusíte mať stále otvorený. Všetko, čo sa v miestnosti deje,
+sa zapisuje do histórie textovej diskusie aj vyslovuje a
+<code>Alt</code> + číslo to prečíta späť odkiaľkoľvek — pozri <a
+href="#počúvať-čo-sa-deje">Počúvať, čo sa deje</a>.</p>
+<h2 id="panel-nástrojov-ovládacie-prvky-zvuku">Panel nástrojov
+<em>Ovládacie prvky zvuku</em></h2>
+<p>V dolnej časti okna. Jedno zastavenie klávesu <code>Tab</code>;
+<code>doľava</code>/<code>doprava</code> sa po ňom pohybujete. Poradie
+tlačidiel:</p>
+<table>
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 7%" />
+<col style="width: 78%" />
+</colgroup>
+<thead>
+<tr>
+<th>Tlačidlo</th>
+<th>Skratka</th>
+<th>Čo robí</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stlmiť mikrofón</td>
+<td><code>M</code></td>
+<td>Stlmí a zruší stlmenie vášho mikrofónu. Zakázané, ale stále
+čitateľné, ak ste sa pripojili bez mikrofónu.</td>
+</tr>
+<tr>
+<td>Zdieľať zvuk</td>
+<td><code>A</code></td>
+<td>Zdieľa zvuk obrazovky alebo karty prehliadača. Prehliadač sa opýta,
+ktorú, a musíte zaškrtnúť aj políčko „zdieľať zvuk“.</td>
+</tr>
+<tr>
+<td>Prehrať zvuk zo súboru</td>
+<td><code>F</code></td>
+<td>Otvorí výber zdroja: súbor z počítača, odkaz alebo súbor uložený na
+serveri.</td>
+</tr>
+<tr>
+<td>Automatické stišovanie</td>
+<td><code>D</code></td>
+<td>Zapne alebo vypne automatické zníženie hlasitosti prehrávanej hudby,
+aby bolo zreteľnejšie počuť hlasy, <strong>pre celú
+miestnosť</strong>.</td>
+</tr>
+<tr>
+<td>Nahrávať rozhovor</td>
+<td><code>R</code></td>
+<td>Spustí a zastaví nahrávanie všetkých na serveri.</td>
+</tr>
+<tr>
+<td>Stiahnuť nahrávku</td>
+<td>—</td>
+<td>Zobrazí sa, keď existuje nahrávka. Stiahne celý rozhovor zmiešaný
+dokopy.</td>
+</tr>
+<tr>
+<td>Stiahnuť samostatné stopy</td>
+<td>—</td>
+<td>Zobrazí sa, keď existuje nahrávka. Stiahne zip s jedným súborom pre
+každého používateľa, všetky zarovnané a doplnené na rovnakú dĺžku.</td>
+</tr>
+<tr>
+<td>Živé vysielanie</td>
+<td>—</td>
+<td>Otvorí panel, v ktorom zadáte údaje servera Icecast a spustíte
+vysielanie rozhovoru naň.</td>
+</tr>
+<tr>
+<td>Kto hovorí</td>
+<td><code>W</code></td>
+<td>Povie, kto hovorí práve teraz alebo nedávno hovoril,
+očíslovane.</td>
+</tr>
+<tr>
+<td>Spoločné poznámky</td>
+<td><code>Alt</code> + <code>N</code></td>
+<td>Otvorí spoločný poznámkový blok pre túto miestnost na novej karte.
+Prítomné len ak má táto inštancia funkciu nastavenú.</td>
+</tr>
+<tr>
+<td>Nastavenia zvuku</td>
+<td>—</td>
+<td>Výber mikrofónu a reproduktorov, spracovanie hlasu, Vysoká kvalita
+hlasu, ďalšie mikrofóny.</td>
+</tr>
+<tr>
+<td>Opustiť miestnosť</td>
+<td>—</td>
+<td>Opustí hovor a vráti vás na recepciu.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="pätička">Pätička</h2>
+<p>Odkaz na projekt SonicRoom a odkaz na túto príručku.</p>
+<hr />
+<h1 id="všetky-klávesové-skratky">Všetky klávesové skratky</h1>
+<p>Fungujú kdekoľvek v hovore, <strong>pokiaľ sa fokus klávesnice
+nenachádza v textovom poli</strong> a váš čítač obrazovky posiela
+klávesy ďalej. Prestanú fungovať, keď je otvorený dialóg „niekto žiada o
+vstup“, pretože na ten treba najprv odpovedať.</p>
+<h2 id="jednotlivé-písmená">Jednotlivé písmená</h2>
+<table>
+<colgroup>
+<col style="width: 9%" />
+<col style="width: 90%" />
+</colgroup>
+<thead>
+<tr>
+<th>Kláves</th>
+<th>Akcia</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>M</code></td>
+<td>Stlmiť / zrušiť stlmenie mikrofónu</td>
+</tr>
+<tr>
+<td><code>A</code></td>
+<td>Spustiť / zastaviť zdieľanie zvuku obrazovky alebo karty</td>
+</tr>
+<tr>
+<td><code>F</code></td>
+<td>Otvoriť výber „Prehrať zvuk zo súboru“</td>
+</tr>
+<tr>
+<td><code>D</code></td>
+<td>Automatické stišovanie zap. / vyp. pre celú miestnosť</td>
+</tr>
+<tr>
+<td><code>R</code></td>
+<td>Spustiť / zastaviť nahrávanie</td>
+</tr>
+<tr>
+<td><code>W</code></td>
+<td>Kto hovorí — oznámi nedávnych rečníkov, očíslovane</td>
+</tr>
+<tr>
+<td><code>V</code></td>
+<td>Kamera zap. / vyp. — <strong>len videohovory</strong></td>
+</tr>
+<tr>
+<td><code>E</code></td>
+<td>Video na celú obrazovku zap. / vyp. — <strong>len
+videohovory</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>V</code> a <code>E</code> nerobia nič v zvukovom hovore, takže
+tieto písmená tam zostávajú voľné.</p>
+<h2 id="s-klávesom-alt">S klávesom Alt</h2>
+<table>
+<colgroup>
+<col style="width: 31%" />
+<col style="width: 68%" />
+</colgroup>
+<thead>
+<tr>
+<th>Kláves</th>
+<th>Akcia</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Alt</code> + <code>1</code> … <code>Alt</code> +
+<code>9</code></td>
+<td>Prečíta posledné správy nahlas. <code>1</code> je najnovšia,
+<code>2</code> tá pred ňou a tak ďalej.</td>
+</tr>
+<tr>
+<td><code>Alt</code> + <code>0</code></td>
+<td>Prečíta desiatu najnovšiu správu.</td>
+</tr>
+<tr>
+<td>Rovnaké <code>Alt</code> + číslo dvakrát rýchlo</td>
+<td>Skopíruje danú správu do schránky.</td>
+</tr>
+<tr>
+<td><code>Alt</code> + <code>N</code></td>
+<td>Otvorí spoločné poznámky tejto miestnosti na novej karte.</td>
+</tr>
+<tr>
+<td><code>Ctrl</code> + <code>Shift</code> + <code>M</code></td>
+<td>Stlmí mikrofóny všetkých — <strong>len moderované
+miestnosti</strong> a len ak máte udelené oprávnenie.</td>
+</tr>
+</tbody>
+</table>
+<p>Spätné čítanie pomocou <code>Alt</code> + číslo je jediná skupina
+skratiek, ktorá <strong>funguje aj počas písania v poli textovej
+diskusie</strong> a funguje, či je panel textovej diskusie otvorený,
+alebo zatvorený. Číta fyzické číselné klávesy, takže ju neovplyvní
+AZERTY, Dvorak ani žiadne iné rozloženie klávesnice.</p>
+<h2 id="navigácia-a-zatváranie">Navigácia a zatváranie</h2>
+<table>
+<colgroup>
+<col style="width: 24%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr>
+<th>Kláves</th>
+<th>Akcia</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Tab</code> / <code>Shift</code> + <code>Tab</code></td>
+<td>Presun medzi časťami aplikácie</td>
+</tr>
+<tr>
+<td><code>Doľava</code> / <code>Doprava</code></td>
+<td>Pohyb po paneli nástrojov alebo zmena posuvníka</td>
+</tr>
+<tr>
+<td><code>Nahor</code> / <code>Nadol</code></td>
+<td>Pohyb v zozname</td>
+</tr>
+<tr>
+<td><code>Home</code> / <code>End</code></td>
+<td>Prvá / posledná položka v zozname alebo minimálna / maximálna
+hodnota posuvníka</td>
+</tr>
+<tr>
+<td><code>Enter</code> / <code>Medzerník</code></td>
+<td>Aktivuje zameranú položku</td>
+</tr>
+<tr>
+<td><code>Escape</code></td>
+<td>Zatvorí panel, dialóg alebo celú obrazovku</td>
+</tr>
+<tr>
+<td><code>Backspace</code></td>
+<td>Návrat z možností používateľa; o priečinok vyššie v prehliadači
+súborov servera</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Odošle správu v diskusii</td>
+</tr>
+<tr>
+<td><code>Shift</code> + <code>Enter</code></td>
+<td>Nový riadok v správe v diskusii</td>
+</tr>
+<tr>
+<td><code>Ctrl</code> / <code>Cmd</code> + <code>C</code></td>
+<td>Skopíruje vybratú správu v diskusii</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h1 id="počúvať-čo-sa-deje">Počúvať, čo sa deje</h1>
+<p>SonicRoom je navrhnutý na jednom pravidle: <strong>všetko, čo sa v
+miestnosti oznámi, si môžete neskôr znova prečítať.</strong></p>
+<p>Každá udalosť v miestnosti — niekto sa pripojil, niekto sa stlmil,
+začalo nahrávanie, začal sa prehrávať súbor, niekto bol odstránený — sa
+vysloví cez živú oblasť (live region) <em>a</em> zapíše do histórie
+textovej diskusie ako systémová správa. Nič sa neoznámi len raz a
+nezmizne. Ak bol váš čítač obrazovky zaneprázdnený, písali ste alebo ste
+to jednoducho prepočuli, stlačte <code>Alt</code> + <code>1</code> a
+vypočujte si to ešte raz.</p>
+<p>Tri veci sa vyslovia, ale zámerne sa <em>nezapisujú</em> do histórie
+textovej diskusie, pretože sa týkajú vášho vlastného pohľadu, nie
+miestnosti: zmeny vašej lokálnej hlasitosti, stlmenie niekoho len pre
+seba a pripnutie videa. Nikoho iného sa netýkajú, a preto nepatria do
+spoločnej časovej osi.</p>
+<p><strong>Zvukové signály.</strong> Krátke zvuky sa prehrávajú pri
+stlmení, zrušení stlmenia, vstupe a opustení niekoho, novej správe v
+textovej diskusii, začatí alebo ukončení zdieľania, žiadosti niekoho
+vstúpiť do miestnosti, a zapnutí či vypnutí kamery. Sú lokálne —
+miestnosť ich nikdy nepočuje — a sú navrhnuté tak, aby sa dali odlíšiť
+od reči.</p>
+<p><strong>„Kto hovorí“ (<code>W</code>).</strong> Hlasy používateľov sa
+striedajú a čítač obrazovky ich nedokáže sledovať. Stlačte
+<code>W</code> a SonicRoom vymenuje ľudí, ktorí práve hovoria alebo
+hovorili v poslednom čase, očíslovane „1. Ana, 2. Luis, 3. Marta“ — od
+najnovšieho. Rovnaké čísla sa nakrátko zobrazia aj na ich dlaždiciach,
+takže vidiaca osoba vedľa vás vidí ten istý zoznam.</p>
+<hr />
+<h1 id="rozprávanie-a-počúvanie">Rozprávanie a počúvanie</h1>
+<p><strong>Stlmenie mikrofónu</strong> vykonáte klávesom <code>M</code>
+alebo prvým tlačidlom na paneli nástrojov. Stlmenie sa týka len vášho
+hlasu. Ak súčasne prehrávate súbor, zdieľate zvuk obrazovky alebo máte
+spustené ďalšie mikrofóny, tie bežia ďalej — zastavíte ich príslušnými
+tlačidlami zastaviť, nie stlmením.</p>
+<p><strong>Vašu vlastnú úroveň</strong> nastavuje posuvník na vašej
+položke zoznamu používateľov a tiež posuvník na recepcii. Zvýšte ju, ak
+vám ľudia hovoria, že ste potichu.</p>
+<p><strong>Úroveň niekoho iného</strong> je posuvník na jeho položke
+zoznamu používateľov. Ten mení len to, čo počujete vy.</p>
+<p><strong>Automatické stišovanie (<code>D</code>)</strong> automaticky
+zníži úroveň hlasitosti hudby, kým niekto hovorí, a zdvihne ju, keď sa
+odmlčí. Je predvolene zapnuté a je platné pre celú miestnosť, takže jeho
+deaktivovanie túto funkcionalitu vypne pre všetkých. V oboch prípadoch
+budete na túto skutočnosť upozornení.</p>
+<p><strong>Nastavenia zvuku</strong> (ozubené koliesko na paneli
+nástrojov) obsahujúce:</p>
+<ul>
+<li><strong>Mikrofón</strong> a <strong>Reproduktory</strong> —
+rozbaľovacie zoznamy zariadení. Zmeny sa použijú okamžite, aj uprostred
+hovoru, a ostanú zapamätané pre ďalšie používanie. Názvy zariadení sa
+zobrazia až po udelení povolenia pristupovať k mikrofónu.</li>
+<li><strong>Spracovanie hlasu</strong> — potlačenie ozveny, potlačenie
+šumu a automatické vyrovnávanie úrovne. Predvolene zapnuté. Vypnite ho,
+ak vysielate hudbu alebo hráte na nástroj, pretože by vám
+prekážalo.</li>
+<li><strong>Vysoká kvalita hlasu (stereo)</strong> — vysiela stereo s
+vyšším dátovým tokom. Predvolene vypnuté, pretože väčšina mikrofónov je
+mono a stojí to ostatných šírku pásma. Použije sa pri vašom
+<strong>ďalšom</strong> hovore, nie pri tom, v ktorom práve ste.</li>
+<li><strong>Ďalšie mikrofóny na streamovanie</strong> — zoznam políčok,
+jedno za každé vstupné zariadenie, ktoré vlastníte okrem hlavného
+mikrofónu, každé s dvojicou prepínačov <strong>Mono</strong> /
+<strong>Stereo</strong>. Po zaškrtnutí sa zariadenie vysiela do
+miestnosti ako samostatný prúd popri vašom hlase a zobrazí sa ako
+samostatná položka v zozname používateľov všetkých. Takto ľudia
+posielajú mixážny pult, nástroj alebo virtuálny audio kábel. Stlmenie
+vášho mikrofónu tieto streamy nestlmí; na ich zastavenie zrušte
+zaškrtnutie.</li>
+</ul>
+<hr />
+<h1 id="zdieľanie-zvuku-do-miestnosti">Zdieľanie zvuku do
+miestnosti</h1>
+<h2 id="zvuk-obrazovky-alebo-karty-a">Zvuk obrazovky alebo karty
+(<code>A</code>)</h2>
+<p>Stlačte <code>A</code> a prehliadač otvorí vlastný výber — systémový
+dialóg, nie súčasť SonicRoom, takže ho čítač obrazovky vníma ako
+samostatné okno. Vyberte obrazovku, okno alebo kartu <strong>a
+zaškrtnite políčko, ktoré zdieľa jej zvuk</strong>; bez neho je
+zdieľanie nemé. Najlepšie to funguje v Chrome a Edge; podpora zdieľania
+systémového zvuku vo Firefoxe je obmedzená alebo úplne chýba, podľa
+platformy.</p>
+<p>Zdieľaný zvuk obchádza spracovanie a limiter vášho mikrofónu, takže
+hudba si zachová dynamiku. Vo zvukovom hovore sa obraz zahodí a odošle
+sa len zvuk. Opätovné stlačenie znaku <code>A</code> zdieľanie
+zastaví.</p>
+<h2 id="prehrávanie-súboru-odkazu-alebo-súboru-na-serveri-f">Prehrávanie
+súboru, odkazu alebo súboru na serveri (<code>F</code>)</h2>
+<p><code>F</code> otvorí dialóg <strong>Prehrávať zvuk</strong>, ktorý
+ponúka tri zdroje:</p>
+<ul>
+<li><strong>Vybrať z počítača</strong> — výber súboru.</li>
+<li><strong>URL adresa zvuku</strong> — textové pole. Vložte ľubovoľný
+verejný odkaz: priamy odkaz na súbor MP3, stream internetového rádia
+alebo stránku s videom či hudobného webu, z ktorej server zvuk extrahuje
+za vás.</li>
+<li><strong>Súbory na serveri</strong> — prehliadateľný strom priečinkov
+so zvukmi uloženým na serveri. Prechádzajte šípkami, <code>Enter</code>
+na priečinku vstúpi dovnútra, <code>Enter</code> na súbore ho prehrá,
+<code>Backspace</code> vás vráti o priečinok vyššie. Dlhé názvy sú
+vizuálne skrátené, ale čítače obrazovky ich vyslovujú celé.</li>
+</ul>
+<p>Keď sa niečo začne prehrávať, zobrazí sa malé okno
+<strong>Prehrávanie súboru</strong> a fokus pristane na jeho tlačidle
+prehrať/pozastaviť, takže <code>Medzerník</code> okamžite pozastaví. Má
+aj posuvník <strong>Vaša hlasitosť</strong>, ktorý mení len vaše vlastné
+odpočúvanie — miestnosť počuje súbor vždy v plnej úrovni — a tlačidlo
+zastavenia. <code>Escape</code> kdekoľvek v tomto okne zastaví
+prehrávanie a toto malé okno zatvorí.</p>
+<p>Opätovné stlačenie <code>F</code> počas prehrávania znova otvorí
+výber a umožní vám prepnúť na iný zdroj bez reštartu prehrávania.</p>
+<hr />
+<h1 id="nahrávanie-a-živé-vysielanie">Nahrávanie a živé vysielanie</h1>
+<p><strong>Nahrávanie (<code>R</code>)</strong> prebieha na serveri,
+takže zachytí všetkých v plnej kvalite bez ohľadu na to, čo robí váš
+vlastný počítač. Spustenie a zastavenie sa oznámi celej miestnosti a v
+hlavičke sa zobrazí značka <strong>REC</strong> — nikoho hlas sa
+nenahráva bez toho, aby o tom vedel.</p>
+<p>Keď nahrávka existuje, na paneli nástrojov sa objavia ďalšie dve
+tlačidlá:</p>
+<ul>
+<li><strong>Stiahnuť nahrávku</strong> — celý rozhovor zmiešaný do
+jedného súboru. Môžete ho stlačiť, aj keď nahrávanie ešte beží; stiahne
+všetko doteraz zaznamenané a nahrávanie pokračuje ďalej.</li>
+<li><strong>Stiahnuť samostatné stopy</strong> — zip archív s jedným
+súborom na používateľa, každý doplnený a časovo zarovnaný, aby po
+vložení do audio editora lícovali.</li>
+</ul>
+<p>Vo videohovore je stiahnutie celého hovoru videosúbor s kamerami a
+obrazovkami všetkých v mriežke; vo zvukovom hovore je to zvukový súbor,
+ako vždy.</p>
+<p><strong>Živé vysielanie</strong> (rádiové tlačidlo na paneli
+nástrojov) posiela celý zmiešaný hovor na server Icecast, ktorý určíte.
+Panel žiada vyplniť názov hostiteľa, port, mountpoint, používateľa,
+heslo, formát a dátový tok a pamätá si ich v tomto prehliadači. Tieto
+údaje sa zvyšku miestnosti nikdy nezobrazia; miestnosť dostane len
+značku <strong>LIVE</strong> a upozornenie o tom, že vysielanie sa
+začalo, a kto ho spustil.</p>
+<hr />
+<h1 id="videohovory">Videohovory</h1>
+<p>Miestnosť je videohovor, len ak bola ako videohovor vytvorená —
+prepínač <strong>Videohovor</strong> na recepcii, ktorý sa potom nedá
+zmeniť späť. Vo zvukovom hovore nič z tohto neexistuje: žiadna kamera,
+žiadne <code>V</code>, žiadne <code>E</code> a zdieľanie obrazovky stále
+posiela len jej zvuk.</p>
+<p><strong>Každý vstupuje s vypnutou kamerou</strong>, vždy. Nič nezapne
+vašu kameru okrem vás.</p>
+<ul>
+<li><strong><code>V</code></strong> zapína a vypína vašu kameru. Všetci
+sa to dozvedia s upozornenia aj v histórii textovej diskusie.</li>
+<li><strong><code>E</code></strong> roztiahne oblasť videa na celú
+obrazovku; opätovné <code>E</code> alebo <code>Escape</code> ju opustí.
+Oznamuje sa oboje. V Safari na iOS, ktoré nemá celú obrazovku pre prvky
+stránky, to SonicRoom povie namiesto toho, aby neurobil nič.</li>
+<li><strong>Pripnutie</strong> spôsobí, že jedna kamera alebo obrazovka
+vyplní oblasť videa len pre vás. Nachádza sa v možnostiach každého
+používateľa („Pripnúť video používateľa <em>meno</em>“), sa nikdy nikomu
+nesignalizuje a pripnutý používateľ o tom nie je informovaný. Ak si
+používateľ vypne kameru, pripnutie sa zachová a čaká — dozviete sa, že
+čaká, a tiež sa dozviete, keď sa obraz vráti späť.</li>
+</ul>
+<p><strong>Sprievodca centrovaním tváre</strong> je tlačidlo vedľa
+tlačidla kamery, predvolene zapnuté. Kým je kamera zapnutá, SonicRoom
+sleduje váš vlastný obraz a vyslovuje krátke korekcie — „posuňte sa
+doprava“, „posuňte sa nahor“, „ste vycentrovaný“, „vaša tvár nie je v
+zábere viditeľná“ — v asertívnej oblasti (live region), takže
+upozornenia sa prerušujú, a nečakajú v rade jedno za druhým. Smery sú
+udávané z vášho pohľadu, nie z pohľadu obrazu. Nápovedu systém opakuje
+každé tri sekundy, kým je ešte aktuálna, upozornenie o úspešnom
+„vycentrovaný“ oznámi len raz, keď sa vám podarí.</p>
+<p><strong>„Opísať video osoby <em>meno</em>“</strong> je v možnostiach
+každého používateľa, vrátane vás. Zachytí jeden záber a požiada Claude,
+aby ho v niekoľkých vetách opísal, prečítal akýkoľvek viditeľný text a
+použil nastavený jazyk aplikácie. Opis sa zapíše do histórie textovej
+diskusie ako všetko ostatné, takže <code>Alt</code> + <code>1</code> ho
+prečíta znova.</p>
+<p>Vyžaduje to <strong>váš vlastný API kľúč Claude</strong>, ktorý
+zadáte tlačidlom kľúča na paneli nástrojov videa. Ukladá sa len v tomto
+prehliadači a požiadavka ide z vášho prehliadača priamo na Claude —
+nikdy neprechádza cez server SonicRoom.</p>
+<p><strong>Pozadie videa</strong> sa vyberá na
+<strong>recepcii</strong>, pod prepínačom <em>Videohovor</em>, a nikdy
+nie v hovore — vďaka tomu je obraz nastavený skôr, než sa čokoľvek
+odošle. Na výber je žiadne pozadie, rozostrenie, jeden zo šiestich
+dodaných obrázkov alebo váš vlastný obrázok. Všetko sa deje vo vašom
+prehliadači, takže miestnosť dostane vždy len hotový obraz a nikdy vaše
+skutočné okolie. Ak to váš prehliadač nedokáže, SonicRoom na to upozorní
+a pošle kameru bez pridávania pozadia, namiesto toho, aby potichu
+zlyhal.</p>
+<hr />
+<h1 id="verejné-miestnosti-vstupovanie-a-hlasovanie">Verejné miestnosti,
+vstupovanie a hlasovanie</h1>
+<p><strong>V bežnej miestnosti SonicRoom nie sú žiadni moderátori ani
+správca.</strong> Nikto nemôže nikoho odstrániť sám. Na oplátku majú
+verejné miestnosti dve kolektívne pravidlá. (<strong>Moderované
+miestnosti</strong>, ktoré majú aj správcov, sú samostatná vec: pozri
+nasledujúcu kapitolu.)</p>
+<p><strong>Žiadosť vstúpiť.</strong> Keď je miestnosť verejná a niekto
+nový žiada o vstup, všetci, ktorí sú už vnútri, začujú zvuk klopania a
+zobrazí sa im dialóg s menom používateľa a tlačidlami
+<strong>Povoliť</strong> a <strong>Zamietnuť</strong> (a <strong>Povoliť
+všetkých</strong> / <strong>Zamietnuť všetkých</strong>, keď čaká viac
+ľudí). Fokus ide rovno na prvé tlačidlo Povoliť a <code>Tab</code>
+cykicky prechádza po ovládacích prvkoch vo vnútri dialógového okna. Nedá
+sa zrušiť klávesom <code>Escape</code> — je to jediný dialóg, na ktorý
+musíte odpovedať. Odpovedať môže ktokoľvek; počíta sa prvá odpoveď.
+Zamietnutie niekoho ho zároveň zablokuje v tejto miestnosti.</p>
+<p>Medzitým používateľ, ktorý žiada o vstup, počuje „Čakanie na
+povolenie vstúpiť do miestnosti…“ (Čaká sa, kým vás niekto v miestnosti
+pustí dnu…) a má k dispozícii len tlačidlo Zrušiť.</p>
+<p><strong>Hlasovanie o odstránení.</strong> Len vo verejných
+miestnostiach a len keď sú prítomní <strong>traja alebo viacerí
+používatelia</strong>. Pod tri sa možnosť vôbec neponúka, takže ju
+nemôže použiť jedna osoba proti druhej. Prah je <em>aspoň polovica</em>,
+vrátane dotknutej osoby: 2 hlasy z 3, 2 zo 4, 3 z 5.</p>
+<p>Hlasovanie je v zozname možností každého používateľa. Jej názov nesie
+priebežný stav — „Odstrániť používateľa Ana (2 hlasy)“ — a každý hlas a
+každé zobranie hlasu späť sa oznámi celej miestnosti, aj s menami.
+Opätovným výberom svoj hlas zoberiete späť. Keďže prah závisí od počtu
+prítomných ľudí, môže existujúce hlasovanie cez hranicu pretlačiť aj
+odchod niekoho z miestnosti.</p>
+<hr />
+<h1 id="moderované-miestnosti-so-správcami">Moderované miestnosti (so
+správcami)</h1>
+<p>Okrem súkromných a verejných miestností, ktoré moderátorov nemajú,
+môžete vytvoriť <strong>moderovanú miestnosť</strong>: miestnosť so
+<strong>správcami</strong>, určenú pre talk show a vedené panelové
+diskusie, kde musí byť niekto schopný umlčať osobu, ktorá zabudla stlmiť
+mikrofón, alebo okamžite odstrániť nežiadúceho používateľa. Všetko
+nižšie existuje len v tomto type miestnosti; bežná miestnosť zostáva
+nezmenená.</p>
+<p><strong>Vytvorenie.</strong> Na recepcii zaškrtnite <strong>„Možnosti
+správcu“</strong>. Rozbalí sa skupina <strong>„Oprávnenia
+používateľov“</strong> s políčkom („Povoliť viacerých správcov“) a
+jedným rozbaľovacím zoznamom pre každú akciu: nahrávanie, zdieľanie
+zvuku, prehrávanie zvuku, zapnutie či vypnutie automatického stišovania,
+živé vysielanie, schvaľovanie nových používateľov, používanie textovej
+diskusie, otváranie spoločných poznámok, stlmenie používateľa pre
+všetkých, stlmenie mikrofónov všetkých a odstraňovanie používateľov. Pri
+každej vyberiete <strong>Len správcovia</strong>,
+<strong>Všetci</strong> alebo <strong>Nikto</strong> (odstraňovanie
+ponúka aj <strong>hlasovaním</strong>). Posledné políčko skryje odkaz
+„Poháňa SonicRoom“ v miestnosti. Tieto voľby sa určia pri vytvorení
+miestnosti a počas jej existencie sa nikdy nemenia; prehliadač si pamätá
+vašu poslednú konfiguráciu pre nabudúce.</p>
+<p><strong>Kto je správca?</strong> Ten, kto miestnosť vytvorí. Ak ste
+povolili viacerých správcov, možnosti každého používateľa obsahujú
+<strong>„Povýšiť na správcu“</strong> (a <strong>„Odvolať
+správcu“</strong> na vrátenie). Správcovia majú v názve položky v
+zozname slovo „správca“. Ak stránku znova načítate alebo stratíte
+pripojenie, rolu dostanete späť, keď sa vrátite.</p>
+<p><strong>Ak odídu všetci správcovia</strong>, a používatelia zostanú
+pripojení, miestnosť <strong>prestane byť moderovaná</strong>: oznámi sa
+to všetkým („The last administrator has left: this room is no longer
+moderated“ — Posledný správca opustil miestnosť: Miestnosť viac nie je
+moderovaná. Všetci môžu opäť používať všetky funkcie.), všetky funkcie
+sa sprístupnia všetkým, textová diskusia sa znova otvorí a miestnosť
+pokračuje ako bežná súkromná alebo verejná miestnosť po zvyšok svojej
+existencie. Nikto nie je povýšený na miesto odchádzajúcich a bývalý
+správca, ak sa aj vráti späť, je bežným používateľom. Ak chcete, aby
+miestnosť prežila vašu neprítomnosť s nedotknutými pravidlami, určte
+pred odchodom druhého správcu.</p>
+<p><strong>Vstup.</strong> V moderovanej miestnosti novopríchodzí
+<strong>vždy</strong> žiadajú o vstup, či je verejná, alebo súkromná.
+Nastavenie „Schvaľovať novích používateľov“ rozhoduje, kto bude počuť
+zvuk zaklopania a komu sa zobrazí dialógové okno Povoliť / Zamietnuť:
+len správcovia, alebo všetci. Správcovia vchádzajú bez klopania.</p>
+<p><strong>Stlmenie niekoho pre všetkých.</strong> V možnostiach
+používateľa: <strong>„Stlmiť pre všetkých“</strong>. Jeho mikrofón sa
+vypne pre celú miestnosť a dozvie sa, kto to urobil. Je to
+<em>mäkké</em> stlmenie: osoba môže mikrofón znova zapnúť klávesom
+<code>M</code>, keď má v úmysle hovoriť (čo vyrieši klasické „počujeme,
+ako hovoríte so susedom“ bez zdvíhania ruky). V ovládacom paneli vidí
+ten, kto na to má oprávnenie, aj <strong>„Stlmiť mikrofóny
+všetkých“</strong>, čo urobí to isté so všetkými ostatnými naraz. Jeho
+skratkou je <code>Ctrl</code> + <code>Shift</code> + <code>M</code> —
+zámerne trojklávesová kombinácia, aby sa nedala stlačiť omylom vedľa
+<code>M</code>. Existuje len v moderovanej miestnosti; inde si túto
+kombináciu ponecháva prehliadač.</p>
+<p><strong>Odstraňovanie ľudí.</strong> Podľa nastavenia: administrátori
+(alebo všetci) odstraňujú priamo z možností používateľa cez
+<strong>„Odstrániť z miestnosti“</strong>, bez hlasovania; alebo
+miestnosť hlasuje ako verejná miestnosť (s <strong>aspoň tromi</strong>
+oprávnenými hlasujúcimi; ak hlasujú len správcovia, počítajú sa len ich
+hlasy). Nikto nemôže odstrániť sám seba. Správcu môže stlmiť alebo
+odstrániť len iný správca.</p>
+<p><strong>Na čo nemáte oprávnenia, sa nezobrazuje.</strong> Ak vaša
+rola nepovoľuje nahrávanie, zdieľanie alebo prehrávanie zvuku, zmenu
+automatického stlmenia, živé vysielanie alebo písanie do textovej
+diskusie, príslušné tlačidlo na paneli nie je a zodpovedajúce písmeno
+(<code>R</code>, <code>A</code>, <code>F</code>, <code>D</code>)
+upozorní „You can’t do that in this room“ (Nemôžete to vykonať v tejto
+miestnosti). Panel textovej diskusie sa stále otvorí, aj keď nemôžete
+písať správy, pretože v histórii sa hromadia všetky upozornenia.</p>
+<p>Miestnosť nesie v hlavičke značku <strong>MOD</strong> a pri vstupe
+budete upozornení ako moderovaná spolu s tým, kto sú správcovia. Každá
+zmena (určenie, stlmenia, odstránenia) bude oznámená a zapíše do
+histórie textovej diskusie.</p>
+<h2 id="rezervované-miestnosti-miestnosť-pridelená-vopred">Rezervované
+miestnosti (miestnosť pridelená vopred)</h2>
+<p>Miestnosť bežne existuje, len kým v nej niekto je, a vytvorí ju ten,
+kto príde prvý. To je problém, keď odkaz vopred propagujete: ktokoľvek
+by mohol otvoriť „vašu“ miestnosť pred vami a stať sa jej správcom,
+alebo by moderovaná miestnosť mohla jednoducho zaniknúť, len čo sa
+vyprázdni. <strong>Rezervovaná miestnosť</strong> to rieši.
+Prevádzkovateľ inštancie vám rezervuje názov miestnosti a dá vám
+<strong>dva odkazy</strong>:</p>
+<ul>
+<li><strong>odkaz správcu</strong>, ktorý obsahuje tajný kľúč. Nechajte
+si ho pre seba; kto miestnosť otvorí s ním, je jej
+<strong>správcom</strong>, vždy, aj po odchode a opätovnom návrate;</li>
+<li><strong>verejný odkaz</strong>, bežná adresa miestnosti, ktorú
+propagujete.</li>
+</ul>
+<p>Kým miestnosť neotvoríte odkazom správcu, každý, kto nasleduje
+verejný odkaz, počuje „This room is reserved and its host hasn’t opened
+it yet“ (Táto miestnosť je rezervovaná a jej správca ju ešte neotvoril)
+a čaká na tejto obrazovke; hneď ako vstúpite cez odkaz správcu, systém
+automaticky umožní čakajúcemu vstúpiť (a ďalší už potom žiadajú ako
+ktokoľvek, kto vstupuje do moderovanej miestnosti, takže rozhodujete vy,
+kto vojde). Rezervovaná miestnosť je vždy moderovaná miestnosť s
+oprávneniami pre používateľov, ktoré nastavil prevádzkovateľ pri
+rezervácii, a <strong>zostáva moderovaná</strong>, kým ste preč: nikto
+ju nemôže prevziať a vy sa vrátite ako jej správca.</p>
+<p>Kľúč si váš prehliadač pamätá pre danú kartu, takže môžete stránku
+znova načítať alebo byť presmerovaný na recepciu kvôli zadaniu mena bez
+jeho straty, a z adresného riadka sa okamžite odstráni, aby skopírovaný
+odkaz nikdy kľúč nenosil. Ak odkaz hostiteľa stratíte, požiadajte
+prevádzkovateľa o nový (starý prestane fungovať).</p>
+<hr />
+<h1 id="spoločné-poznámky">Spoločné poznámky</h1>
+<p>Ak má táto inštancia SonicRoom nastavené poznámky, panel nástrojov má
+tlačidlo <strong>Spoločné poznámky</strong> a <code>Alt</code> +
+<code>N</code> robí to isté. Otvorí jeden spoločný, kolaboračný
+poznámkový blok miestnosti <strong>na novej karte prehliadača</strong> —
+nikdy nie vo vnútri hovoru, takže váš čítač obrazovky pracuje s bežným
+upravovateľným dokumentom.</p>
+<p>Prvé stlačenie poznámku vytvorí; stlačenie ktoréhokoľvek ďalšieho
+používateľa otvorí tú istú a skutočnosť, že existuje, sa oznámi a zapíše
+do textovej diskusie spolu s odkazom. Vráťte sa na kartu SonicRoom a
+hovor stále beží.</p>
+<hr />
+<h1 id="voľby-ktoré-môžete-zadať-do-panelu-s-adresou">Voľby, ktoré
+môžete zadať do panelu s adresou</h1>
+<p>Čokoľvek za znakom <code>?</code> v odkaze na miestnosť nastavuje
+voľbu a viaceré možno kombinovať pomocou <code>&amp;</code>.</p>
+<table>
+<colgroup>
+<col style="width: 15%" />
+<col style="width: 84%" />
+</colgroup>
+<thead>
+<tr>
+<th>Voľba</th>
+<th>Účinok</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>?displayName=Ana</code></td>
+<td>Pripojí sa s týmto menom, preskočí čakáreň</td>
+</tr>
+<tr>
+<td><code>?video=on</code></td>
+<td>Urobí z miestnosti videohovor</td>
+</tr>
+<tr>
+<td><code>?public=true</code></td>
+<td>Urobí miestnosť verejnou</td>
+</tr>
+<tr>
+<td><code>?mic=off</code></td>
+<td>Pripojí sa bez mikrofónu — len počúvanie a textová diskusia</td>
+</tr>
+<tr>
+<td><code>?p2p=off</code></td>
+<td>Vždy sprostredkuje cez server, aj pre dvoch používateľov</td>
+</tr>
+<tr>
+<td><code>?lang=es</code></td>
+<td>Vynúti jazyk rozhrania (<code>en</code>, <code>es</code>,
+<code>fr</code>, <code>sk</code>)</td>
+</tr>
+<tr>
+<td><code>?ios=on</code></td>
+<td>Vynúti zvukovú cestu iOS v ľubovoľnom prehliadači (náhradné riešenie
+tvrdohlavých problémov so zvukom)</td>
+</tr>
+<tr>
+<td><code>?host=…</code></td>
+<td>Otvorí rezervovanú miestnosť ako jej správca (pozri „Rezervované
+miestnosti“); okamžite sa odstráni z adresného riadka</td>
+</tr>
+</tbody>
+</table>
+<p>Napríklad odkaz, ktorý niekoho rovno pripojí do francúzskeho
+videohovoru ako „Ana“:</p>
+<pre><code>https://your-instance.example/room/studio?video=on&amp;lang=fr&amp;displayName=Ana</code></pre>
+<hr />
+<h1 id="keď-niečo-nefunguje">Keď niečo nefunguje</h1>
+<p><strong>Jedno písmeno nič nenapíše a nič nerobí.</strong> Váš čítač
+obrazovky je v režime čítania a jednoznakový klávesový príkaz pohltí.
+<code>NVDA</code> + <code>Medzerník</code>, <code>Kláves JAWS</code> +
+<code>Z</code>, <code>Caps Lock</code> + <code>Medzerník</code> pre
+Narrator, alebo vypnite Quick Nav vo VoiceOveri. Zďaleka najčastejší
+problém.</p>
+<p><strong>Jedno písmeno sa objaví vo vstupnom poli textovej
+diskusie.</strong> Fokus je v poli správy. Je to zámer — musíte byť
+schopní napísať do správy písmeno M. Stlačte <code>Escape</code> na
+zatvorenie panela textovej diskusie alebo z poľa odídite klávesom
+<code>Tab</code>, a skúste znova. <code>Alt</code> + číslo je jediná
+skratka, ktorá funguje aj zvnútra poľa.</p>
+<p><strong><code>Tab</code> ma nepresunie na ďalšie tlačidlo na paneli
+nástrojov.</strong> Tak to nemá byť. Celý panel nástrojov je jediné
+zastavenie klávesu; použite <code>šípku doprava</code>. <code>Tab</code>
+panel nástrojov opúšťa.</p>
+<p><strong><code>Alt</code> + číslo oznámi „Žiadna správa 1“.</strong> V
+miestnosti sa ešte nič nezaznamenalo do histórie. Udalosti v miestnosti
+sa počítajú ako správy, takže históriu začne napĺňať prvý vstupujúci
+používateľ.</p>
+<p><strong>Nikoho nepočujem.</strong> Skontrolujte rozbaľovací zoznam
+<strong>Reproduktory</strong> v nastaveniach zvuku — prehliadače nie
+vždy nasledujú predvolené systémové zariadenie. Potom skontrolujte, či
+ste daného používateľa sami nestlmili: jej riadok by sa čítal „stlmený
+vami“.</p>
+<p><strong>Ostatní hovoria, že zniem veľmi potichu.</strong> Zvýšte
+<strong>Úroveň vášho mikrofónu</strong> v možnostiach používateľa pre
+samého seba cez zoznam používateľov alebo použite tlačidlo Test na
+recepcii, ktoré pri nastavovaní oznamuje úroveň hlasitosti.</p>
+<p><strong>Môj ďalší mikrofón sa nespustil.</strong> SonicRoom žiada
+presne dané zariadenie a neprijíma náhradu, takže ak ho používa iný
+program alebo je odpojené, zlyhá namiesto toho, aby potichu poslalo váš
+hlavný mikrofón dvakrát. Zatvorte aplikáciu, ktorá zariadenie používa, a
+zaškrtnite ho znova.</p>
+<p><strong>Zdieľanie obrazovky nezdieľa zvuk.</strong> Políčko zvuku v
+samotnom dialógu zdieľania prehliadača nebolo zaškrtnuté. Ten dialóg
+patrí prehliadaču, nie SonicRoom. Skúste Chrome alebo Edge, ak váš
+prehliadač túto možnosť vôbec neponúka.</p>
+<p><strong>„Opísať video“ hovorí, aby ste pridali kľúč API.</strong>
+Táto funkcia používa váš vlastný API kľúč Claude, zadaný tlačidlom kľúča
+na paneli nástrojov videa. Uchováva sa len v tomto prehliadači.</p>
+<hr />
+<h1 id="jednostranový-prehľad-klávesov">Jednostranový prehľad
+klávesov</h1>
+<table>
+<colgroup>
+<col style="width: 46%" />
+<col style="width: 53%" />
+</colgroup>
+<thead>
+<tr>
+<th>Kláves</th>
+<th>Akcia</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>M</code></td>
+<td>Stlmiť / zrušiť stlmenie</td>
+</tr>
+<tr>
+<td><code>A</code></td>
+<td>Zdieľať / prestať zdieľať zvuk obrazovky alebo karty</td>
+</tr>
+<tr>
+<td><code>F</code></td>
+<td>Prehrávať zvuk — otvoriť výber zdroja</td>
+</tr>
+<tr>
+<td><code>D</code></td>
+<td>Automatické stišovanie zap. / vyp. (celá miestnosť)</td>
+</tr>
+<tr>
+<td><code>R</code></td>
+<td>Spustiť / zastaviť nahrávanie</td>
+</tr>
+<tr>
+<td><code>W</code></td>
+<td>Kto hovorí</td>
+</tr>
+<tr>
+<td><code>V</code></td>
+<td>Kamera zap. / vyp. (videohovory)</td>
+</tr>
+<tr>
+<td><code>E</code></td>
+<td>Video na celú obrazovku (videohovory)</td>
+</tr>
+<tr>
+<td><code>Alt</code> + <code>1</code>…<code>9</code>,
+<code>0</code></td>
+<td>Prečítať posledných desať správ, najnovšia je prvá</td>
+</tr>
+<tr>
+<td>Rovnaké <code>Alt</code> + číslo dvakrát</td>
+<td>Skopírovať danú správu</td>
+</tr>
+<tr>
+<td><code>Alt</code> + <code>N</code></td>
+<td>Spoločné poznámky na novej karte</td>
+</tr>
+<tr>
+<td><code>Ctrl</code> + <code>Shift</code> + <code>M</code></td>
+<td>Stlmiť všetkých (moderované miestnosti)</td>
+</tr>
+<tr>
+<td><code>Tab</code> / <code>Shift</code> + <code>Tab</code></td>
+<td>Navigácia po častiach aplikácie</td>
+</tr>
+<tr>
+<td><code>Doľava</code> / <code>Doprava</code></td>
+<td>Navigácia na paneli nástrojov; zmena posuvníka</td>
+</tr>
+<tr>
+<td><code>Nahor</code> / <code>Nadol</code></td>
+<td>Pohyb v zozname</td>
+</tr>
+<tr>
+<td><code>Home</code> / <code>End</code></td>
+<td>Prvá / posledná položka; minimálna / maximálna hodnota
+posuvníka</td>
+</tr>
+<tr>
+<td><code>Enter</code> / <code>Medzerník</code></td>
+<td>Aktivovať</td>
+</tr>
+<tr>
+<td><code>Escape</code></td>
+<td>Zatvoriť panel, dialóg alebo celú obrazovku</td>
+</tr>
+<tr>
+<td><code>Backspace</code></td>
+<td>Späť z možností; o priečinok vyššie</td>
+</tr>
+<tr>
+<td><code>Enter</code> v poli správy</td>
+<td>Odoslať</td>
+</tr>
+<tr>
+<td><code>Shift</code> + <code>Enter</code> v poli správy</td>
+<td>Nový riadok</td>
+</tr>
+<tr>
+<td><code>Ctrl</code> / <code>Cmd</code> + <code>C</code> na správe</td>
+<td>Skopírovať ju</td>
+</tr>
+<tr>
+<td><code>NVDA</code> + <code>Medzerník</code></td>
+<td>NVDA: režim prehliadania ↔︎ režim fokusu</td>
+</tr>
+<tr>
+<td><code>Kláves JAWS</code> + <code>Z</code></td>
+<td>JAWS: virtuálny kurzor vyp. / zap.</td>
+</tr>
+<tr>
+<td><code>Caps Lock</code> + <code>Medzerník</code></td>
+<td>Narrator: režim skenovania vyp. / zap.</td>
+</tr>
+<tr>
+<td><code>Doľava</code> + <code>Doprava</code> súčasne</td>
+<td>VoiceOver: Quick Nav vyp. / zap.</td>
+</tr>
+<tr>
+<td><code>Orca Modifier</code> + <code>A</code></td>
+<td>Orca: režim prehliadania ↔︎ režim zameriavania</td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>
