@@ -20,6 +20,8 @@ public sealed class AppSettings
     /// <summary>Hi-fi voice opt-in: stereo ~128 kbps voice instead of the default mono ~64 kbps.
     /// Same trade-off as the web toggle — most mics are mono, and 128k costs every listener.</summary>
     public bool HifiVoice { get; set; }
+    /// <summary>Windows Voice Capture DSP (AEC + noise suppression), default off.</summary>
+    public bool VoiceProcessingEnabled { get; set; }
     /// <summary>Send-side mic boost (0–4×) applied before the soft limiter, like the web's micGain.</summary>
     public double MicGain { get; set; } = 1.0;
     /// <summary>Per-device extra-mic channel choice, keyed by device product name (WaveIn
@@ -30,22 +32,31 @@ public sealed class AppSettings
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SonicRoom", "settings.json");
 
     public static AppSettings Load()
+        => LoadFrom(FilePath);
+
+    /// <summary>Load from an explicit path, so the persistence round-trip can be tested without
+    /// touching the real user's settings file.</summary>
+    internal static AppSettings LoadFrom(string path)
     {
         try
         {
-            if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+            if (File.Exists(path))
+                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path)) ?? new AppSettings();
         }
         catch (Exception ex) { Diag.Log("AppSettings.Load", ex); }
         return new AppSettings();
     }
 
     public void Save()
+        => SaveTo(FilePath);
+
+    /// <summary>Save to an explicit path — the testable counterpart of <see cref="LoadFrom"/>.</summary>
+    internal void SaveTo(string path)
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { Diag.Log("AppSettings.Save", ex); }
     }
