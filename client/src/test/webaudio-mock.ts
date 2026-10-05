@@ -70,6 +70,7 @@ export class FakeBiquadFilterNode extends FakeAudioNode {
   type = "lowpass";
   frequency = new FakeAudioParam(350);
   Q = new FakeAudioParam(1);
+  gain = new FakeAudioParam(0);
 }
 
 export class FakeDynamicsCompressorNode extends FakeAudioNode {
@@ -85,6 +86,12 @@ export class FakeAnalyserNode extends FakeAudioNode {
   smoothingTimeConstant = 0.8;
   // Filled by tests that want to simulate a "speaking" peer.
   nextSamples: Float32Array | null = null;
+  get frequencyBinCount() {
+    return this.fftSize / 2;
+  }
+  getFloatFrequencyData(buf: Float32Array) {
+    buf.fill(-100);
+  }
   getFloatTimeDomainData(buf: Float32Array) {
     if (this.nextSamples) {
       buf.set(this.nextSamples.subarray(0, buf.length));
