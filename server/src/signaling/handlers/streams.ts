@@ -88,7 +88,10 @@ export function registerStreamHandlers(ctx: ConnectionContext) {
     // Close this peer's file producer(s) so consumers stop receiving the audio;
     // the matching consumers close client-side via file-stream-stopped.
     for (const [id, producer] of currentPeer.producers) {
-      if ((producer.appData?.source as string) === "file") {
+      if (
+        (producer.appData?.source as string) === "file" ||
+        (producer.appData?.source as string) === "file-video"
+      ) {
         producer.close();
         currentPeer.producers.delete(id);
         // Also stop its capture/feed if recording/streaming — otherwise the
