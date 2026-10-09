@@ -878,11 +878,12 @@ export function Room() {
         />
       )}
 
-      {/* Hidden local-file picker opened from the audio-source chooser. */}
+      {/* Hidden media picker. Video files retain picture in video rooms and
+          contribute only their sound in audio rooms. */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="audio/*"
+        accept="audio/*,video/*,.mkv"
         onChange={onFileChosen}
         className="hidden"
         aria-hidden="true"
