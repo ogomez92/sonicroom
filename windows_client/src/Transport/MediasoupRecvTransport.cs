@@ -31,7 +31,8 @@ public sealed class MediasoupRecvTransport
     public event Action<string>? Log;
 
     /// <summary>Raised per incoming RTP packet: (ssrc, opusPayload). Decode/mix downstream.</summary>
-    public event Action<uint, byte[]>? OpusPacketReceived;
+    /// <summary>(SSRC, RTP sequence number, Opus payload) per received packet.</summary>
+    public event Action<uint, ushort, byte[]>? OpusPacketReceived;
 
     public MediasoupRecvTransport(MediasoupRpc rpc, MediasoupDevice device)
     {
@@ -73,7 +74,7 @@ public sealed class MediasoupRecvTransport
         _pc = pc;
         pc.onconnectionstatechange += s => Log?.Invoke($"recv pc → {s}");
         pc.OnRtpPacketReceived += (System.Net.IPEndPoint ep, SDPMediaTypesEnum kind, RTPPacket pkt) =>
-            OpusPacketReceived?.Invoke(pkt.Header.SyncSource, pkt.Payload);
+            OpusPacketReceived?.Invoke(pkt.Header.SyncSource, pkt.Header.SequenceNumber, pkt.Payload);
 
         var opus = new SDPAudioVideoMediaFormat(SDPMediaTypesEnum.audio, OpusPt, "opus", 48000, 2, RemoteSdp.OpusFmtp);
         var track = new MediaStreamTrack(SDPMediaTypesEnum.audio, false,

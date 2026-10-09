@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
-using Concentus.Structs;
 using NAudio.Wave;
 
 namespace SonicRoom.Windows.Audio;
 
 /// <summary>
-/// Decodes each consumer's incoming Opus (keyed by SSRC), buffers the PCM, and mixes all sources
-/// into one 48 kHz/16-bit/stereo stream for the speaker output. Per-source gain composes
+/// Decodes each consumer's incoming Opus (keyed by SSRC) through its own
+/// <see cref="OpusJitterBuffer"/> (reorder, loss concealment, bounded delay) and mixes all
+/// sources into one 48 kHz/16-bit/stereo stream for the speaker output. Per-source gain composes
 /// volume × local-mute × music-duck, plus a master gain and global deafen — mirroring the web
 /// client's <c>PeerAudioRegistry.effectiveGain</c>. Implements <see cref="IWaveProvider"/> so an
 /// NAudio output device can pull from it directly.
@@ -20,8 +20,11 @@ public sealed class PeerMixer : IWaveProvider
 {
     public WaveFormat WaveFormat { get; } = new WaveFormat(48000, 16, 2);
 
-    // ~400 ms jitter cap: if a source runs far ahead (we fell behind), drop to bound latency.
+    // Bound for the local-media monitor queue (outgoing file/URL playback heard locally).
     private const int MaxQueueShorts = 48000 * 2 * 400 / 1000;
+    // WaveOut requests more than one 20 ms frame at a time. Prime enough outgoing media to fill
+    // its callback instead of playing one frame followed by silence until the next callback.
+    private const int LocalMediaPrebufferShorts = 960 * 2 * 6; // 120 ms
 
     // Peak (absolute S16) above which a decoded frame counts as "active" for the
     // speaking indicator, and how long a source stays "speaking" after its last
@@ -31,8 +34,8 @@ public sealed class PeerMixer : IWaveProvider
 
     private sealed class Source
     {
-        public required OpusDecoder Decoder;
-        public readonly Queue<short> Pcm = new();
+        public readonly OpusJitterBuffer Jitter = new();
+        public ushort NextLegacySeq;   // for callers that don't pass an RTP sequence
         public float Volume = 1f;
         public bool IsMusic;
         public bool LocalMuted;
@@ -41,6 +44,10 @@ public sealed class PeerMixer : IWaveProvider
 
     private readonly Dictionary<uint, Source> _sources = new();
     private readonly object _lock = new();
+    // Outgoing file/URL media is not echoed back by the SFU, so keep a bounded local-monitor
+    // queue and mix it into the selected speaker output alongside incoming peers.
+    private readonly Queue<short> _localMedia = new();
+    private bool _localMediaPrimed;
 
     // Currently-playing cue buffers (interleaved S16 stereo @48k) with a play cursor each.
     // A List because cues can overlap (a chat chime during the knock loop).
@@ -59,53 +66,81 @@ public sealed class PeerMixer : IWaveProvider
     {
         if (!_sources.TryGetValue(ssrc, out var src))
         {
-            src = new Source { Decoder = new OpusDecoder(48000, 2) };
+            src = new Source();
             _sources[ssrc] = src;
         }
         return src;
     }
 
-    /// <summary>Decode one incoming Opus packet and enqueue its PCM (call from the RTP thread).</summary>
+    /// <summary>Queue one incoming RTP Opus payload (call from the RTP thread).</summary>
+    public void OnOpusPacket(uint ssrc, ushort seq, byte[] payload)
+    {
+        lock (_lock) GetOrAdd(ssrc).Jitter.Push(seq, payload);
+    }
+
+    /// <summary>Queue a payload with no RTP sequence (assumed in order) — tests / local sources.</summary>
     public void OnOpusPacket(uint ssrc, byte[] payload)
     {
-        Source src;
-        lock (_lock) src = GetOrAdd(ssrc);
-
-        var pcm = new short[960 * 2];
-        int n;
-        try { n = src.Decoder.Decode(payload, 0, payload.Length, pcm, 0, 960, false); }
-        catch { return; }
-
-        var peak = 0;
-        for (var i = 0; i < n * 2; i++) { var a = Math.Abs((int)pcm[i]); if (a > peak) peak = a; }
-
         lock (_lock)
         {
-            if (peak > SpeakingPeak) src.LastActiveMs = Environment.TickCount64;
-            if (src.Pcm.Count > MaxQueueShorts) src.Pcm.Clear();
-            for (var i = 0; i < n * 2; i++) src.Pcm.Enqueue(pcm[i]);
+            var src = GetOrAdd(ssrc);
+            src.Jitter.Push(src.NextLegacySeq++, payload);
         }
     }
+
+    private short[] _srcBuf = Array.Empty<short>();
+    private int[] _mixL = Array.Empty<int>();
+    private int[] _mixR = Array.Empty<int>();
 
     public int Read(byte[] buffer, int offset, int count)
     {
         var frames = count / 4; // stereo 16-bit
         lock (_lock)
         {
+            if (_mixL.Length < frames)
+            {
+                _mixL = new int[frames];
+                _mixR = new int[frames];
+                _srcBuf = new short[frames * 2];
+            }
+            Array.Clear(_mixL, 0, frames);
+            Array.Clear(_mixR, 0, frames);
+
+            // Every source is pulled every callback, even muted/deafened ones: the
+            // jitter buffer's clock is the speaker's clock, and an undrained source
+            // would only build delay (the old queue did exactly that while muted).
+            foreach (var s in _sources.Values)
+            {
+                var real = s.Jitter.Pull(_srcBuf, frames);
+                if (real == 0) continue;
+                var peak = 0;
+                for (var i = 0; i < real * 2; i++) { var a = Math.Abs((int)_srcBuf[i]); if (a > peak) peak = a; }
+                if (peak > SpeakingPeak) s.LastActiveMs = Environment.TickCount64;
+                if (Deafened || s.LocalMuted) continue;
+                var g = s.Volume;
+                if (s.IsMusic && DuckActive && DuckingEnabled) g *= DuckFactor;
+                for (var f = 0; f < real; f++)
+                {
+                    _mixL[f] += (int)(_srcBuf[f * 2] * g);
+                    _mixR[f] += (int)(_srcBuf[f * 2 + 1] * g);
+                }
+            }
+
             for (var f = 0; f < frames; f++)
             {
-                int left = 0, right = 0;
-                if (!Deafened)
+                int left = _mixL[f], right = _mixR[f];
+                if (_localMediaPrimed && _localMedia.Count >= 2)
                 {
-                    foreach (var s in _sources.Values)
+                    var mediaLeft = _localMedia.Dequeue();
+                    var mediaRight = _localMedia.Dequeue();
+                    if (!Deafened)
                     {
-                        if (s.LocalMuted || s.Pcm.Count < 2) continue;
-                        var g = s.Volume;
-                        if (s.IsMusic && DuckActive && DuckingEnabled) g *= DuckFactor;
-                        left += (int)(s.Pcm.Dequeue() * g);
-                        right += (int)(s.Pcm.Dequeue() * g);
+                        var mediaGain = DuckActive && DuckingEnabled ? DuckFactor : 1f;
+                        left += (int)(mediaLeft * mediaGain);
+                        right += (int)(mediaRight * mediaGain);
                     }
                 }
+                else if (_localMediaPrimed) _localMediaPrimed = false;
 
                 left = (int)(left * MasterGain);
                 right = (int)(right * MasterGain);
@@ -139,6 +174,30 @@ public sealed class PeerMixer : IWaveProvider
     {
         if (pcm.Length < 2) return;
         lock (_lock) _cues.Add((pcm, 0));
+    }
+
+    /// <summary>Queue outgoing media PCM for local monitoring (interleaved S16 stereo @48 kHz).</summary>
+    public void QueueLocalMedia(short[] pcm)
+    {
+        lock (_lock)
+        {
+            if (_localMedia.Count + pcm.Length > MaxQueueShorts)
+            {
+                _localMedia.Clear();
+                _localMediaPrimed = false;
+            }
+            for (var i = 0; i < pcm.Length; i++) _localMedia.Enqueue(pcm[i]);
+            if (_localMedia.Count >= LocalMediaPrebufferShorts) _localMediaPrimed = true;
+        }
+    }
+
+    public void ClearLocalMedia()
+    {
+        lock (_lock)
+        {
+            _localMedia.Clear();
+            _localMediaPrimed = false;
+        }
     }
 
     /// <summary>Whether this source decoded a loud frame within the speaking hold window.</summary>

@@ -29,11 +29,14 @@ public sealed class PeerItem : INotifyPropertyChanged
         set { _muted = value; Raise(); Raise(nameof(MuteLabel)); Raise(nameof(RowLabel)); }
     }
 
-    private double _volume = 1.0;
-    public double Volume
+    // UI-facing percentage. The audio session converts this to its existing 0-2 gain.
+    // Exposing 0-200 with one-point steps makes keyboard and screen-reader operation
+    // behave like a conventional Windows volume control while retaining 2x boost.
+    private double _volumePercent = 100.0;
+    public double VolumePercent
     {
-        get => _volume;
-        set { _volume = value; Raise(); }
+        get => _volumePercent;
+        set { _volumePercent = value; Raise(); }
     }
 
     /// <summary>Short status text shown next to the name ("muted" when the peer is muted).</summary>
@@ -127,6 +130,62 @@ public sealed class PeerItem : INotifyPropertyChanged
     public string CasterLabel => I18n.F("remove_caster_label", _displayName);
     public string StopStreamLabel => I18n.F("stop_stream_label", _displayName);
 
+    // ---- moderated rooms (admin actions) -----------------------------------------------------
+
+    /// <summary>Whether this participant is a room administrator (moderated rooms only).</summary>
+    private bool _isAdmin;
+    public bool IsAdmin
+    {
+        get => _isAdmin;
+        set
+        {
+            if (_isAdmin == value) return;
+            _isAdmin = value;
+            Raise(); Raise(nameof(AdminBadge)); Raise(nameof(RowLabel));
+            Raise(nameof(SetAdminContent)); Raise(nameof(SetAdminLabel));
+        }
+    }
+
+    /// <summary>Short "ADM" marker on the row; "administrator" is in the row's spoken label.</summary>
+    public string AdminBadge => _isAdmin ? "ADM" : "";
+
+    /// <summary>Whether I may force-mute this participant (moderated room + my mutePeer gate).</summary>
+    private bool _canMutePeer;
+    public bool CanMutePeer
+    {
+        get => _canMutePeer;
+        set { if (_canMutePeer == value) return; _canMutePeer = value; Raise(nameof(MutePeerVisibility)); }
+    }
+
+    /// <summary>Whether I may name/revoke this participant as a co-admin (I'm an admin, room allows
+    /// several admins, and it isn't me or a caster).</summary>
+    private bool _canSetAdmin;
+    public bool CanSetAdmin
+    {
+        get => _canSetAdmin;
+        set { if (_canSetAdmin == value) return; _canSetAdmin = value; Raise(nameof(SetAdminVisibility)); }
+    }
+
+    /// <summary>Whether I may remove this participant outright (moderated room, direct kick mode,
+    /// the room allows it, and they're not an admin unless I am).</summary>
+    private bool _canAdminRemove;
+    public bool CanAdminRemove
+    {
+        get => _canAdminRemove;
+        set { if (_canAdminRemove == value) return; _canAdminRemove = value; Raise(nameof(RemoveVisibility)); }
+    }
+
+    public Visibility MutePeerVisibility => _canMutePeer ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility SetAdminVisibility => _canSetAdmin ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility RemoveVisibility => _canAdminRemove ? Visibility.Visible : Visibility.Collapsed;
+
+    public string MutePeerContent => I18n.T("mute_peer_btn");
+    public string SetAdminContent => _isAdmin ? I18n.T("revoke_admin_btn") : I18n.T("make_admin_btn");
+    public string RemoveContent => I18n.T("remove_from_room_btn");
+    public string MutePeerLabel => I18n.F("mute_peer_label", _displayName);
+    public string SetAdminLabel => _isAdmin ? I18n.F("revoke_admin_label", _displayName) : I18n.F("make_admin_label", _displayName);
+    public string RemoveLabel => I18n.F("remove_from_room_label", _displayName);
+
     // Visible (localized) button texts for the row template.
     public string LocalMuteContent => I18n.T("local_mute_btn");
     public string StopStreamContent => I18n.T("stop_stream_btn");
@@ -140,6 +199,7 @@ public sealed class PeerItem : INotifyPropertyChanged
         get
         {
             var label = _displayName;
+            if (_isAdmin) label += ", " + I18n.T("admin_label");
             if (_isCaster) label += ", " + I18n.T("caster_label");
             if (_muted) label += ", " + I18n.T("peer_muted_label");
             if (_votes > 0) label += ", " + I18n.F("row_votes", _votes);
@@ -163,6 +223,13 @@ public sealed class PeerItem : INotifyPropertyChanged
         Raise(nameof(StopStreamContent));
         Raise(nameof(CasterContent));
         Raise(nameof(KickContent));
+        Raise(nameof(AdminBadge));
+        Raise(nameof(MutePeerContent));
+        Raise(nameof(SetAdminContent));
+        Raise(nameof(RemoveContent));
+        Raise(nameof(MutePeerLabel));
+        Raise(nameof(SetAdminLabel));
+        Raise(nameof(RemoveLabel));
         Raise(nameof(RowLabel));
     }
 

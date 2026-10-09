@@ -32,6 +32,7 @@ import {
   looksLikeStreamContentType,
   resolveLibraryPath,
   streamFallbackAudio,
+  streamFallbackVideo,
   TranscodeBusyError,
 } from "./audio-sources.js";
 
@@ -243,6 +244,49 @@ async function main() {
           res.status(503).json({ error: "Server busy transcoding audio, try again shortly" });
         } else {
           res.status(502).json({ error: "Could not get audio from that URL" });
+        }
+      } else {
+        res.destroy();
+      }
+    }
+  });
+
+  // Video rooms use a separate proxy that preserves picture and audio. It
+  // deliberately always transcodes to WebM/VP8/Opus: IPTV TS/HLS/DASH streams,
+  // opaque provider URLs, and containers such as MKV are then all safe for the
+  // browser's media element and captureStream. Audio rooms continue to use the
+  // audio-only endpoint above, so they never download or encode picture.
+  app.get("/api/video-proxy", async (req, res) => {
+    const raw = typeof req.query.url === "string" ? req.query.url : "";
+    if (!raw) {
+      res.status(400).json({ error: "Missing video URL" });
+      return;
+    }
+    try {
+      await assertPublicAudioUrl(raw);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Video URL failed" });
+      return;
+    }
+    try {
+      const extracted = await streamFallbackVideo(raw);
+      res.status(200);
+      res.setHeader("Content-Type", extracted.contentType);
+      res.setHeader("Cache-Control", "no-store");
+      res.on("close", () => extracted.destroy());
+      extracted.stream.on("error", (err) => {
+        console.error(`[video-proxy] transcode stream failed: ${String(err)}`);
+        res.destroy(err instanceof Error ? err : new Error(String(err)));
+      });
+      extracted.stream.pipe(res);
+    } catch (err) {
+      console.error(`[video-proxy] transcode fallback failed: ${String(err)}`);
+      if (!res.headersSent) {
+        if (err instanceof TranscodeBusyError) {
+          res.setHeader("Retry-After", "5");
+          res.status(503).json({ error: "Server busy transcoding video, try again shortly" });
+        } else {
+          res.status(502).json({ error: "Could not get video from that URL" });
         }
       } else {
         res.destroy();
