@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using SIPSorcery.Net;
 
@@ -16,9 +17,12 @@ namespace SonicRoom.Windows.Transport;
 /// </summary>
 public sealed class MediasoupSendTransport
 {
+    private const int ProducerSlots = 16;
     private readonly MediasoupRpc _rpc;
     private RTCPeerConnection? _pc;
     private TransportParams? _tp;
+    private IReadOnlyList<RemoteSdp.AudioSection>? _sections;
+    private readonly List<MediaStreamTrack> _tracks = new();
     private int _nextIndex; // 0-based producer index == AudioStreamList slot (primary is 0)
 
     public event Action<string>? Log;
@@ -34,6 +38,9 @@ public sealed class MediasoupSendTransport
         public required uint Ssrc { get; init; }
         public required AudioStream? Stream { get; init; }
         public required string Source { get; init; }
+        public required int PayloadType { get; init; }
+        internal int FramesSent;
+        internal int SecurityWaitLogged;
     }
 
     private async Task EnsureTransportAsync()
@@ -57,6 +64,38 @@ public sealed class MediasoupSendTransport
     }
 
     /// <summary>
+    /// Negotiate all potential outgoing audio m-lines before DTLS starts. SIPSorcery installs the
+    /// SRTP security context only on streams present during negotiation; tracks added after the
+    /// connection is established otherwise accept SendAudio calls but emit no RTP.
+    /// </summary>
+    private async Task EnsureProducerSlotsAsync()
+    {
+        if (_sections is not null) return;
+        await EnsureTransportAsync();
+        var pc = _pc!;
+
+        for (var index = 0; index < ProducerSlots; index++)
+        {
+            var pt = RemoteSdp.OpusPt + index;
+            var opus = new SDPAudioVideoMediaFormat(SDPMediaTypesEnum.audio, pt, "opus", 48000, 2, RemoteSdp.OpusFmtp);
+            var track = new MediaStreamTrack(SDPMediaTypesEnum.audio, false,
+                new List<SDPAudioVideoMediaFormat> { opus }, MediaStreamStatusEnum.SendOnly, null, null);
+            _tracks.Add(track);
+            pc.addTrack(track);
+        }
+
+        var offer = pc.createOffer(null);
+        await pc.setLocalDescription(offer);
+        var sections = RemoteSdp.ParseAudioSections(offer.sdp);
+        if (sections.Count < ProducerSlots || pc.AudioStreamList.Count < ProducerSlots)
+            throw new InvalidOperationException($"Could not allocate {ProducerSlots} outgoing audio streams.");
+        var answer = RemoteSdp.BuildSendAnswer(_tp!, sections);
+        var setRes = pc.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answer });
+        Log?.Invoke($"send setRemoteDescription({sections.Count} preallocated m-line(s)) → {setRes}");
+        _sections = sections;
+    }
+
+    /// <summary>
     /// Add a producer (its own track/SSRC), renegotiate, and produce it to the SFU.
     /// Opus is ALWAYS signaled as <c>opus/48000/2</c> — mediasoup's codec matching requires the
     /// channel count to equal the router's (2) exactly; mono vs stereo travels in the encoded
@@ -66,33 +105,18 @@ public sealed class MediasoupSendTransport
     public async Task<Producer> ProduceAsync(string source, string? title, bool stereo = true,
         int? maxAverageBitrate = null)
     {
-        await EnsureTransportAsync();
+        await EnsureProducerSlotsAsync();
         var pc = _pc!;
 
-        // Distinct payload type per producer so bundled m-lines don't collide (100, 101, 102, …).
-        // The Nth addTrack configures AudioStreamList[N] (index 0 = the pre-existing primary stream).
         var index = _nextIndex++;
-        var pt = RemoteSdp.OpusPt + index;
-
-        var opus = new SDPAudioVideoMediaFormat(SDPMediaTypesEnum.audio, pt, "opus", 48000, 2, RemoteSdp.OpusFmtp);
-        var track = new MediaStreamTrack(SDPMediaTypesEnum.audio, false,
-            new List<SDPAudioVideoMediaFormat> { opus }, MediaStreamStatusEnum.SendOnly, null, null);
-        pc.addTrack(track);
+        if (index >= ProducerSlots)
+            throw new InvalidOperationException($"This call already uses all {ProducerSlots} outgoing audio slots.");
+        var track = _tracks[index];
         var ssrc = track.Ssrc;
-
-        var offer = pc.createOffer(null);
-        await pc.setLocalDescription(offer);
-
-        var sections = RemoteSdp.ParseAudioSections(offer.sdp);
-        var answer = RemoteSdp.BuildSendAnswer(_tp!, sections);
-        var setRes = pc.setRemoteDescription(new RTCSessionDescriptionInit { type = RTCSdpType.answer, sdp = answer });
-        Log?.Invoke($"send setRemoteDescription({sections.Count} m-line(s)) → {setRes}");
-
-        var section = index < sections.Count ? sections[index] : new RemoteSdp.AudioSection(index.ToString(), pt, 2);
-        Log?.Invoke($"diag: audioStreamList={pc.AudioStreamList.Count} sections={sections.Count} producingIdx={index} primary={(pc.AudioStream is null ? "null" : "ok")}");
-        var stream = index < pc.AudioStreamList.Count ? pc.AudioStreamList[index]
-                   : (index == 0 ? pc.AudioStream : null);
-        var cname = stream?.RtcpSession?.Cname ?? pc.AudioStream?.RtcpSession?.Cname ?? Guid.NewGuid().ToString("N")[..16];
+        var section = _sections![index];
+        Log?.Invoke($"diag: audioStreamList={pc.AudioStreamList.Count} sections={_sections.Count} producingIdx={index} primary={(pc.AudioStream is null ? "null" : "ok")}");
+        var stream = pc.AudioStreamList[index];
+        var cname = stream.RtcpSession?.Cname ?? pc.AudioStream?.RtcpSession?.Cname ?? Guid.NewGuid().ToString("N")[..16];
 
         var codecParameters = new Dictionary<string, object>
         {
@@ -125,11 +149,30 @@ public sealed class MediasoupSendTransport
         var producerId = await _rpc.ProduceAsync("audio", rtpParameters, source, title);
         Log?.Invoke($"produced {source} producerId={producerId} ssrc={ssrc} pt={section.PayloadType}");
 
-        return new Producer { ProducerId = producerId, Ssrc = ssrc, Stream = stream, Source = source };
+        return new Producer
+        {
+            ProducerId = producerId, Ssrc = ssrc, Stream = stream, Source = source,
+            PayloadType = section.PayloadType,
+        };
     }
 
     /// <summary>Send one 20 ms Opus frame on a specific producer's audio stream.</summary>
-    public void SendOpusFrame(Producer producer, byte[] opus) => producer.Stream?.SendAudio(960, opus);
+    public void SendOpusFrame(Producer producer, byte[] opus)
+    {
+        if (producer.Stream is not { } stream) return;
+        if (!stream.IsSecurityContextReady())
+        {
+            if (Interlocked.Exchange(ref producer.SecurityWaitLogged, 1) == 0)
+                Log?.Invoke($"waiting for {producer.Source} SRTP context ssrc={producer.Ssrc}");
+            return;
+        }
+        // SendAudio() lets SIPSorcery pick the payload type via GetSendingFormat(), which resolves
+        // to PCMU (pt 0) on secondary bundled audio streams — mediasoup then drops every packet as
+        // not matching the producer's declared Opus codec. Stamp the negotiated pt explicitly.
+        stream.SendAudioFrame(960, producer.PayloadType, opus);
+        if (Interlocked.Increment(ref producer.FramesSent) == 1)
+            Log?.Invoke($"sent first {producer.Source} RTP frame ssrc={producer.Ssrc} pt={producer.PayloadType} secure=true");
+    }
 
     public void Close() => _pc?.close();
 }

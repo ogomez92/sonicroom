@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using SocketIO.Core;
 using SocketIOClient;
 using SocketIOClient.Transport;
+using SonicRoom.Windows.Session;
 
 namespace SonicRoom.Windows.Signaling;
 
@@ -52,6 +53,15 @@ public sealed class SignalingClient : IAsyncDisposable
     public event Action? OnJoinApproved;
     public event Action<JoinDenied>? OnJoinDenied;
     public event Action? OnRoomPublic;
+
+    // ---- shared notes (NoteLab) --------------------------------------------------------
+    public event Action<NotesUpdated>? OnNotesUpdated;
+
+    // ---- moderated rooms (admins) ------------------------------------------------------
+    public event Action<AdminsChanged>? OnAdminsChanged;
+    public event Action? OnModerationEnded;
+    public event Action<YouWereMutedMsg>? OnYouWereMuted;
+    public event Action<AllMutedMsg>? OnAllMuted;
 
     public event Action<StreamPresence>? OnShareStarted;
     public event Action<StreamPresence>? OnShareStopped;
@@ -208,6 +218,13 @@ public sealed class SignalingClient : IAsyncDisposable
         Handle<JoinDenied>("join-denied", v => OnJoinDenied?.Invoke(v));
         HandleBare("room-public", () => OnRoomPublic?.Invoke());
 
+        Handle<NotesUpdated>("notes-updated", v => OnNotesUpdated?.Invoke(v));
+
+        Handle<AdminsChanged>("admins-changed", v => OnAdminsChanged?.Invoke(v));
+        HandleBare("moderation-ended", () => OnModerationEnded?.Invoke());
+        Handle<YouWereMutedMsg>("you-were-muted", v => OnYouWereMuted?.Invoke(v));
+        Handle<AllMutedMsg>("all-muted", v => OnAllMuted?.Invoke(v));
+
         Handle<StreamPresence>("share-started", v => OnShareStarted?.Invoke(v));
         Handle<StreamPresence>("share-stopped", v => OnShareStopped?.Invoke(v));
         Handle<StreamPresence>("file-stream-started", v => OnFileStarted?.Invoke(v));
@@ -260,11 +277,21 @@ public sealed class SignalingClient : IAsyncDisposable
         catch { return "<unreadable>"; }
     }
 
-    // Events not yet given typed handlers — logged verbatim for now. switch-to-p2p can never
-    // apply to this client (it always joins disableP2p:true, which pins the room to the SFU).
+    // Server events this client does NOT act on, logged verbatim so a report like "the room turned
+    // into a video call and nothing happened" has something to point at. Anything listed here must
+    // NOT also have a typed handler above, or it would fire twice — keep the two lists in step when
+    // adding one (grep the server's .emit(" calls to see what exists).
+    //
+    // switch-to-p2p can never apply: this client always joins disableP2p:true, which pins the room
+    // to the SFU. The video events are real but unsupported here — this client is audio-only (its
+    // mediasoup filter is Kind == "audio" and both SDP builders are audio-only), so a video room's
+    // picture simply does not exist for it. Logging them makes that visible instead of silent.
     private static readonly string[] RawLoggedEvents =
     {
         "switch-to-p2p",
+        "room-video",
+        "video-started",
+        "video-stopped",
     };
 
     public async ValueTask DisposeAsync()

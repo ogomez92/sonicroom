@@ -1,0 +1,28 @@
+# Builds the native Windows client and runs its tests on a real Windows runner.
+# The client is WinUI 3: its XAML compiler and audio stack only exist on Windows,
+# so this is the only place a change to windows_client/ is compiled end to end.
+name: Windows client
+
+on:
+  push:
+    paths:
+      - "windows_client/**"
+      - ".github/workflows/windows-client.yml"
+  pull_request:
+    paths:
+      - "windows_client/**"
+      - ".github/workflows/windows-client.yml"
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: Test
+        run: dotnet test windows_client/tests -c Release
+      - name: Build (x64)
+        run: dotnet build windows_client/src -c Release -p:Platform=x64 -r win-x64
