@@ -273,6 +273,8 @@ describe("buildFfmpegStreamArgs", () => {
     // No `file:` etc. — a hostile playlist can't make ffmpeg read local disk.
     assert.equal(after(args, "-protocol_whitelist"), "http,https,tcp,tls,crypto");
     assert.equal(after(args, "-i"), "http://host/live/123.ts");
+    // IPTV proxies 503 briefly while a channel restarts; retry instead of failing.
+    assert.equal(after(args, "-reconnect_on_http_error"), "5xx");
     assert.ok(args.includes("-vn"));
     assert.equal(after(args, "-c:a"), "libopus");
     assert.equal(args.at(-1), "pipe:1");
