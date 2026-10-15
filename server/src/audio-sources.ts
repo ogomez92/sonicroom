@@ -341,8 +341,14 @@ export function buildFfmpegStreamArgs(url: string): string[] {
     "1",
     "-reconnect_streamed",
     "1",
+    // Retry 5xx too, including on the first open: an IPTV proxy (Dispatcharr)
+    // answers "503 channel is stopping, Retry-After: 1" when our direct probe's
+    // hang-up and this reconnect race its channel teardown. A cap of 3 s gives
+    // retries at ~1 s and ~2 s; at 2 s ffmpeg tried only once and gave up.
+    "-reconnect_on_http_error",
+    "5xx",
     "-reconnect_delay_max",
-    "2",
+    "3",
     // Cap probing: standard MPEG-TS/HLS expose codecs early, so the default
     // 5s/5MB analysis just delays first audio. yt-dlp is the backup if this is
     // ever too little to detect the stream.
