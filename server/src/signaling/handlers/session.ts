@@ -26,6 +26,13 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
   } = ctx;
 
   socket.on("join", async (data: unknown, cb: (res: unknown) => void) => {
+    // One room per connection. A second join used to leave the first room's
+    // peer behind for good — a ghost no kick could remove (kick and disconnect
+    // only tear down the current room) that also kept that room alive.
+    if (session.currentRoom) {
+      cb({ ok: false, error: "already_joined" });
+      return;
+    }
     try {
       const {
         roomName,
@@ -57,6 +64,13 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
       }
 
       const room = await getOrCreateRoom(roomName);
+      // Knocking on one room and then joining another: retract the old knock,
+      // or it would sit in that room's queue until this socket disconnects.
+      if (session.pendingRequest && session.pendingRequest !== room) {
+        session.pendingRequest.pendingJoins.delete(socket.id);
+        helpers.broadcastJoinRequests(session.pendingRequest);
+        session.pendingRequest = null;
+      }
       const ip = clientIp(socket);
 
       // Banned from this room by a prior deny — refuse outright (no knock).
