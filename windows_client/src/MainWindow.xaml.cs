@@ -278,7 +278,7 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(VoiceProcessingCallCheck, I18n.T("voice_processing"));
         AutomationProperties.SetHelpText(VoiceProcessingLobbyCheck, I18n.T("voice_processing_help"));
         AutomationProperties.SetHelpText(VoiceProcessingCallCheck, I18n.T("voice_processing_help"));
-        ConnectButton.Content = I18n.T("join_call");
+        ConnectButton.Content = I18n.T(_connecting ? "cancel_join" : "join_call");
         AutomationProperties.SetName(ConnectStatus, I18n.T("connection_status"));
         HostKeyBox.Header = I18n.T("header_host_key");
         AutomationProperties.SetName(HostKeyBox, I18n.T("header_host_key"));
@@ -808,10 +808,30 @@ public sealed partial class MainWindow : Window
 
     // ---- connect / leave ----------------------------------------------------------------------
 
+    // While a join is in flight (connecting, knocking, waiting for a reserved room's host) the
+    // Join button becomes Cancel — those waits have no timeout, so it is the only way out.
+    private bool _connecting;
+
+    private void SetConnecting(bool connecting)
+    {
+        _connecting = connecting;
+        ConnectButton.Content = I18n.T(connecting ? "cancel_join" : "join_call");
+    }
+
+    private async System.Threading.Tasks.Task CancelConnectAsync()
+    {
+        var session = _session;
+        _session = null;          // the pending OnConnectClick sees this and stays quiet
+        SetConnecting(false);
+        Announce(I18n.T("join_canceled"));
+        if (session is not null) await session.DisposeAsync();
+    }
+
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
+        if (_connecting) { await CancelConnectAsync(); return; }
         StopMicTest();
-        ConnectButton.IsEnabled = false;
+        SetConnecting(true);
         Announce(I18n.T("connecting"));
 
         var session = new RoomSession();
@@ -1079,6 +1099,8 @@ public sealed partial class MainWindow : Window
                 mic.Index, speaker.Index,
                 string.IsNullOrEmpty(hostKey) ? null : hostKey,
                 moderation);
+            if (_session != session) return;   // cancelled while the join was finishing
+            SetConnecting(false);
 
             _serverUrl = ServerBox.Text.Trim().TrimEnd('/');
             _roomName = room;
@@ -1113,8 +1135,9 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             Diag.Log("Join failed", ex);
+            if (_session != session) return;   // cancelled: CancelConnectAsync announced + disposed
+            SetConnecting(false);
             Announce(I18n.F("failed_join", ex.Message));
-            ConnectButton.IsEnabled = true;
             _session = null;
             await session.DisposeAsync();
         }

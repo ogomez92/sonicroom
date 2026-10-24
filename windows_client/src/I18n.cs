@@ -73,6 +73,8 @@ public static class I18n
             "El altavoz seleccionado no está disponible. Se usará el altavoz predeterminado del sistema.",
             "Le haut-parleur sélectionné n'est pas disponible. Le haut-parleur par défaut du système sera utilisé."),
         ["join_call"] = ("Join call", "Unirse a la llamada", "Rejoindre l'appel"),
+        ["cancel_join"] = ("Cancel joining", "Cancelar la entrada", "Annuler la connexion"),
+        ["join_canceled"] = ("Joining canceled", "Entrada cancelada", "Connexion annulée"),
         ["connection_status"] = ("Connection status", "Estado de la conexión", "État de la connexion"),
         ["connecting"] = ("Connecting…", "Conectando…", "Connexion…"),
         ["public_rooms"] = ("Public rooms", "Salas públicas", "Salons publics"),
