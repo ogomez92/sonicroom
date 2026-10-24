@@ -516,6 +516,18 @@ describe("audio share", () => {
     h.unmount();
   });
 
+  it("shares without a microphone", async () => {
+    const h = await joinRoom({
+      join: { mode: "sfu", peers: [peerEntry("id-bob"), peerEntry("id-carol")] },
+      joinOpts: { noMic: true },
+    });
+    expect(useRoomStore.getState().hasMic).toBe(false);
+    await runAct(() => h.result.current.toggleAudioShare());
+    expect(useRoomStore.getState().isSharingAudio).toBe(true);
+    expect(producersOfSource("share")).toHaveLength(1);
+    h.unmount();
+  });
+
   it("does not share when the display capture has no audio track", async () => {
     mediaController.displayHasAudio = false;
     const h = await sfuJoin([peerEntry("id-bob", [voiceProd("p1")]), peerEntry("id-carol")]);
