@@ -1853,19 +1853,32 @@ public sealed partial class MainWindow : Window
             }));
             return;
         }
-        LaunchBrowser(url);
+        if (!LaunchBrowser(url))
+        {
+            Announce(I18n.T("notes_failed"));
+            return;
+        }
         AnnounceEvent(I18n.T("notes_opened"));
     }
 
-    /// <summary>Open a URL in the user's default browser (the NoteLab note lives on the web).</summary>
-    private static void LaunchBrowser(string url)
+    /// <summary>Open a URL in the user's default browser (the NoteLab note lives on the web).
+    /// Only absolute http/https URLs: the URL comes from the server, and ShellExecute would
+    /// happily run a file path, UNC share or custom protocol handler.</summary>
+    private static bool LaunchBrowser(string url)
     {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            Diag.Log($"LaunchBrowser: refused non-http(s) URL '{url}'");
+            return false;
+        }
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true };
+            var psi = new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true };
             System.Diagnostics.Process.Start(psi);
+            return true;
         }
-        catch (Exception ex) { Diag.Log("LaunchBrowser", ex); }
+        catch (Exception ex) { Diag.Log("LaunchBrowser", ex); return false; }
     }
 
     private async void OnMuteAllClick(object sender, RoutedEventArgs e)
