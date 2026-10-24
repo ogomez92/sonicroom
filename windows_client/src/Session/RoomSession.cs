@@ -658,15 +658,17 @@ public sealed class RoomSession : IAsyncDisposable
                 _sharePumpCts?.Cancel();
                 _sharePumpCts = null;
                 _shareBus.Stop();
+                if (_shareProducer is { } sp) _send?.ReleaseSlot(sp);   // server already closed it
                 _shareProducer = null;
                 break;
             case "file":
                 _filePumpCts?.Cancel();
                 _filePumpCts = null;
+                if (_fileProducer is { } fp) _send?.ReleaseSlot(fp);
                 _fileProducer = null;
                 break;
             case "mic":
-                if (_extraMics.Remove(producerId, out var m)) m.Cap.Dispose();
+                if (_extraMics.Remove(producerId, out var m)) { m.Cap.Dispose(); _send?.ReleaseSlot(m.Prod); }
                 break;
         }
     }
@@ -868,7 +870,8 @@ public sealed class RoomSession : IAsyncDisposable
     {
         if (!_extraMics.Remove(producerId, out var m)) return;
         m.Cap.Dispose();
-        try { await _sig.EmitAckRawAsync("stop-extra-mic", new { producerId }); }
+        // Free the m-line slot only once the server confirms the producer is closed.
+        try { await _sig.EmitAckRawAsync("stop-extra-mic", new { producerId }); _send?.ReleaseSlot(m.Prod); }
         catch (Exception ex) { Log?.Invoke($"stop-extra-mic: {ex.Message}"); }
         Log?.Invoke("extra mic stopped");
     }
@@ -1195,9 +1198,14 @@ public sealed class RoomSession : IAsyncDisposable
     {
         _filePumpCts?.Cancel();
         _filePumpCts = null;
+        var prod = _fileProducer;
         _fileProducer = null;
         _mixer.ClearLocalMedia();
-        try { await _sig.EmitAckRawAsync("stop-file-stream", new { }); }
+        try
+        {
+            await _sig.EmitAckRawAsync("stop-file-stream", new { });
+            if (prod is not null) _send?.ReleaseSlot(prod);
+        }
         catch (Exception ex) { Log?.Invoke($"stop-file-stream: {ex.Message}"); }
         Log?.Invoke("file streaming stopped");
     }
@@ -1287,8 +1295,13 @@ public sealed class RoomSession : IAsyncDisposable
         _sharePumpCts?.Cancel();
         _sharePumpCts = null;
         _shareBus.Stop();
+        var prod = _shareProducer;
         _shareProducer = null;
-        try { await _sig.EmitAckRawAsync("stop-share", new { }); }
+        try
+        {
+            await _sig.EmitAckRawAsync("stop-share", new { });
+            if (prod is not null) _send?.ReleaseSlot(prod);
+        }
         catch (Exception ex) { Log?.Invoke($"stop-share: {ex.Message}"); }
         Log?.Invoke("app share stopped");
     }

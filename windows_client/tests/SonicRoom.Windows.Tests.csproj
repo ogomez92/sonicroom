@@ -22,6 +22,7 @@
     <Compile Include="..\src\Audio\VoiceProcessingSelection.cs" Link="Audio\VoiceProcessingSelection.cs" />
     <Compile Include="..\src\Session\Moderation.cs" Link="Session\Moderation.cs" />
     <Compile Include="..\src\Signaling\SignalingMessages.cs" Link="Signaling\SignalingMessages.cs" />
+    <Compile Include="..\src\Transport\ProducerSlotPool.cs" Link="Transport\ProducerSlotPool.cs" />
     <Compile Include="..\src\Accessibility\PercentText.cs" Link="Accessibility\PercentText.cs" />
   </ItemGroup>
 </Project>
