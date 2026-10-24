@@ -77,6 +77,28 @@ describe("OutgoingAudioGraph", () => {
     expect(send.producers).toHaveLength(1);
   });
 
+  it("closes a share producer that resolves after the share was stopped", async () => {
+    const { graph, wireSfu } = makeGraph();
+    const send = wireSfu();
+    const track = fakeTrack("System Audio");
+    const displayStream = {
+      getAudioTracks: () => [track],
+      getTracks: () => [track],
+    } as unknown as MediaStream;
+
+    graph.attachShare([track], displayStream);
+    const inFlight = graph.produceShare();
+    graph.teardownShareLocal();
+    await inFlight;
+    expect(send.producers[0].closed).toBe(true);
+
+    // A fresh share produces again instead of seeing a stale "live" producer.
+    graph.attachShare([track], displayStream);
+    await graph.produceShare();
+    expect(send.producers).toHaveLength(2);
+    expect(send.producers[1].closed).toBe(false);
+  });
+
   it("produces the file dest as a 'file' track titled from the store's file name", async () => {
     const { graph, wireSfu } = makeGraph();
     const send = wireSfu();
