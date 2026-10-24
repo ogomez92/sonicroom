@@ -278,6 +278,8 @@ export interface YtDlpOptions {
   // streamFallbackAudio only: override the global concurrent-transcode cap (for
   // tests). Production reads MAX_CONCURRENT_TRANSCODES (AUDIO_TRANSCODE_LIMIT).
   maxConcurrentTranscodes?: number;
+  // streamFallbackVideo only: override the video cap (MAX_CONCURRENT_VIDEO_TRANSCODES).
+  maxConcurrentVideoTranscodes?: number;
 }
 
 // yt-dlp argv: best audio-only format to stdout, a single item, no on-disk cache
@@ -706,7 +708,16 @@ export class TranscodeBusyError extends Error {
   }
 }
 
+// A VP8 encode costs many times an Opus one, so video transcodes get their own,
+// much smaller cap on top of the shared one: 32 libvpx encodes from an
+// unauthenticated endpoint would saturate a small box. Tune via env.
+export const MAX_CONCURRENT_VIDEO_TRANSCODES = Math.max(
+  1,
+  Number(process.env.VIDEO_TRANSCODE_LIMIT) || 2,
+);
+
 let activeTranscodes = 0;
+let activeVideoTranscodes = 0;
 
 // Test-only: current in-flight transcode count (asserts slots are released).
 export function activeTranscodeCount(): number {
@@ -772,13 +783,18 @@ export async function streamFallbackVideo(
   options: YtDlpOptions = {},
 ): Promise<YtDlpExtraction> {
   const limit = options.maxConcurrentTranscodes ?? MAX_CONCURRENT_TRANSCODES;
-  if (activeTranscodes >= limit) throw new TranscodeBusyError();
+  const videoLimit = options.maxConcurrentVideoTranscodes ?? MAX_CONCURRENT_VIDEO_TRANSCODES;
+  if (activeTranscodes >= limit || activeVideoTranscodes >= videoLimit) {
+    throw new TranscodeBusyError();
+  }
   activeTranscodes += 1;
+  activeVideoTranscodes += 1;
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
     activeTranscodes -= 1;
+    activeVideoTranscodes -= 1;
   };
   try {
     let extraction: YtDlpExtraction;
