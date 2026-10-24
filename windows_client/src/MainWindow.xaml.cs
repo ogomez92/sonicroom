@@ -25,6 +25,7 @@ namespace SonicRoom.Windows;
 public sealed partial class MainWindow : Window
 {
     private const int ChatCap = 500;
+    private const double PercentScale = 100.0;
     // Max gap between two Alt+<same number> presses for the second to count as a
     // "copy that message" double-press rather than a fresh readback (mirrors the web client).
     private const int DoublePressMs = 600;
@@ -43,6 +44,9 @@ public sealed partial class MainWindow : Window
     private bool _inCall;
     private bool _chatHintGiven;
     private bool _uiReady;
+    private bool _syncingVoiceMode;
+    private bool _rememberedMicUnavailable;
+    private bool _rememberedSpeakerUnavailable;
     private string _serverUrl = "";
     private string _roomName = "";
     // The last Alt+number readback (digit + when), so a quick second press of the
@@ -90,8 +94,12 @@ public sealed partial class MainWindow : Window
         ServerBox.Text = settings.ServerUrl;
         RoomBox.Text = settings.Room;
         NameBox.Text = settings.DisplayName;
-        HifiCheck.IsChecked = settings.HifiVoice;
-        MicGainSlider.Value = settings.MicGain;
+        var voiceProcessing = settings.VoiceProcessingEnabled;
+        HifiCheck.IsChecked = settings.HifiVoice && !voiceProcessing;
+        VoiceProcessingLobbyCheck.IsChecked = voiceProcessing;
+        VoiceProcessingCallCheck.IsChecked = voiceProcessing;
+        MicGainSlider.Value = ToPercent(settings.MicGain);
+        MediaVolumeSlider.Value = ToPercent(settings.MediaVolume);
         _micStereoByDevice = settings.MicStereoByDevice ?? new();
 
         // Land the keyboard where the next action is: the room name when a server is already
@@ -100,9 +108,14 @@ public sealed partial class MainWindow : Window
         {
             var target = string.IsNullOrWhiteSpace(ServerBox.Text) ? ServerBox : RoomBox;
             target.Focus(FocusState.Programmatic);
+            if (_rememberedMicUnavailable) Announce(I18n.T("remembered_mic_unavailable"));
+            if (_rememberedSpeakerUnavailable) Announce(I18n.T("remembered_speaker_unavailable"));
         };
         PopulateMicList(settings.MicDevice);
         PopulateSpeakerList(settings.SpeakerDevice);
+        PopulatePolicyCombos();
+        HostKeyBox.Text = settings.HostKey;
+        ApplyCommandLineOverrides();
         ApplyStrings();
         _ = RefreshPublicRoomsAsync(announceResult: false);
 
@@ -161,9 +174,23 @@ public sealed partial class MainWindow : Window
             SpeakerDevice = SpeakerSelect.SelectedIndex == 0 ? "System default" : (SpeakerSelect.SelectedItem as string ?? "System default"),
             Language = I18n.Lang,
             HifiVoice = HifiCheck.IsChecked == true,
-            MicGain = MicGainSlider.Value,
+            VoiceProcessingEnabled = VoiceProcessingLobbyCheck.IsChecked == true,
+            MicGain = ToGain(MicGainSlider.Value),
+            MediaVolume = ToGain(MediaVolumeSlider.Value),
             MicStereoByDevice = _micStereoByDevice,
+            HostKey = HostKeyBox.Text,
         }.Save();
+    }
+
+    /// <summary>Apply <c>--server/--room/--name/--host</c> from the launch command line. Each flag
+    /// that is present wins over the remembered value; <c>--host</c> also wins over the box.</summary>
+    private void ApplyCommandLineOverrides()
+    {
+        var args = LaunchArgs.Current;
+        if (!string.IsNullOrWhiteSpace(args.ServerUrl)) ServerBox.Text = args.ServerUrl!;
+        if (!string.IsNullOrWhiteSpace(args.Room)) RoomBox.Text = args.Room!;
+        if (!string.IsNullOrWhiteSpace(args.DisplayName)) NameBox.Text = args.DisplayName!;
+        if (!string.IsNullOrWhiteSpace(args.HostKey)) HostKeyBox.Text = args.HostKey!;
     }
 
     private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
@@ -178,11 +205,47 @@ public sealed partial class MainWindow : Window
         SaveSettings();
     }
 
-    private void OnHifiChanged(object sender, RoutedEventArgs e)
+    private async void OnHifiChanged(object sender, RoutedEventArgs e)
     {
+        if (_syncingVoiceMode) return;
+        var result = VoiceProcessingSelection.SetHifiVoice(
+            VoiceProcessingLobbyCheck.IsChecked == true, HifiCheck.IsChecked == true);
+        SyncVoiceProcessingChecks(result.VoiceProcessing);
+        if (result.OtherModeDisabled) Announce(I18n.T("voice_processing_disabled_for_hifi"));
         SaveSettings();
         // Like the web toggle: the live producer's codec can't be renegotiated mid-call.
         if (_inCall) Announce(I18n.T("hifi_next_call"));
+        if (_session is not null && result.OtherModeDisabled)
+            await _session.SwitchVoiceProcessingAsync(false);
+    }
+
+    private async void OnVoiceProcessingChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncingVoiceMode) return;
+        var enabled = sender is CheckBox check && check.IsChecked == true;
+        var result = VoiceProcessingSelection.SetVoiceProcessing(HifiCheck.IsChecked == true, enabled);
+        _syncingVoiceMode = true;
+        HifiCheck.IsChecked = result.HifiVoice;
+        _syncingVoiceMode = false;
+        SyncVoiceProcessingChecks(result.VoiceProcessing);
+        if (result.OtherModeDisabled) Announce(I18n.T("hifi_disabled_for_voice_processing"));
+        SaveSettings();
+
+        if (_testCap is not null)
+        {
+            StopMicTest();
+            StartMicTest(announceStart: false);
+        }
+        if (_session is not null)
+            await _session.SwitchVoiceProcessingAsync(enabled);
+    }
+
+    private void SyncVoiceProcessingChecks(bool enabled)
+    {
+        _syncingVoiceMode = true;
+        VoiceProcessingLobbyCheck.IsChecked = enabled;
+        VoiceProcessingCallCheck.IsChecked = enabled;
+        _syncingVoiceMode = false;
     }
 
     /// <summary>(Re)apply every localized string. Called at startup and on language switch, so
@@ -208,8 +271,33 @@ public sealed partial class MainWindow : Window
         ListenOnlyCheck.Content = I18n.T("listen_only");
         PublicCheck.Content = I18n.T("make_public");
         HifiCheck.Content = I18n.T("hifi_voice");
+        AutomationProperties.SetHelpText(HifiCheck, I18n.T("hifi_voice_help"));
+        VoiceProcessingLobbyCheck.Content = I18n.T("voice_processing");
+        VoiceProcessingCallCheck.Content = I18n.T("voice_processing");
+        AutomationProperties.SetName(VoiceProcessingLobbyCheck, I18n.T("voice_processing"));
+        AutomationProperties.SetName(VoiceProcessingCallCheck, I18n.T("voice_processing"));
+        AutomationProperties.SetHelpText(VoiceProcessingLobbyCheck, I18n.T("voice_processing_help"));
+        AutomationProperties.SetHelpText(VoiceProcessingCallCheck, I18n.T("voice_processing_help"));
         ConnectButton.Content = I18n.T("join_call");
         AutomationProperties.SetName(ConnectStatus, I18n.T("connection_status"));
+        HostKeyBox.Header = I18n.T("header_host_key");
+        AutomationProperties.SetName(HostKeyBox, I18n.T("header_host_key"));
+        AutomationProperties.SetHelpText(HostKeyBox, I18n.T("host_key_help"));
+        AdminOptionsExpander.Header = I18n.T("admin_options");
+        AutomationProperties.SetName(AdminOptionsExpander, I18n.T("admin_options"));
+        MultipleAdminsCheck.Content = I18n.T("multiple_admins");
+        HidePoweredByCheck.Content = I18n.T("hide_powered_by");
+        RecordingPolicy.Header = I18n.T("policy_recording");
+        ShareAudioPolicy.Header = I18n.T("policy_share_audio");
+        StreamAudioPolicy.Header = I18n.T("policy_stream_audio");
+        DuckingPolicy.Header = I18n.T("policy_ducking");
+        LiveStreamingPolicy.Header = I18n.T("policy_live_streaming");
+        ApproveJoinsPolicy.Header = I18n.T("policy_approve_joins");
+        ChatPolicy.Header = I18n.T("policy_chat");
+        NotesPolicy.Header = I18n.T("policy_notes");
+        MutePeerPolicy.Header = I18n.T("policy_mute_peer");
+        MuteAllPolicy.Header = I18n.T("policy_mute_all");
+        KickPolicy.Header = I18n.T("policy_kick");
         PublicRoomsHeader.Text = I18n.T("public_rooms");
         RefreshRoomsButton.Content = I18n.T("refresh");
         AutomationProperties.SetName(RefreshRoomsButton, I18n.T("refresh_rooms"));
@@ -253,6 +341,8 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(LeaveButton, I18n.T("leave_call"));
         MicGainLabel.Text = I18n.T("mic_gain");
         AutomationProperties.SetName(MicGainSlider, I18n.T("mic_gain_name"));
+        MediaVolumeLabel.Text = I18n.T("media_volume");
+        AutomationProperties.SetName(MediaVolumeSlider, I18n.T("media_volume_name"));
         MasterLabel.Text = I18n.T("master");
         AutomationProperties.SetName(MasterVolume, I18n.T("master_volume_name"));
     }
@@ -262,6 +352,66 @@ public sealed partial class MainWindow : Window
         var sel = combo.SelectedIndex;
         combo.Items[0] = I18n.T("system_default");
         if (sel == 0) combo.SelectedIndex = 0;
+    }
+
+    // ---- moderated-room policy builder ---------------------------------------------------------
+
+    // The who-may-do-it options. Ducking and approveJoins have no "nobody" (the server's schema
+    // forbids it); kick is its own five-way set.
+    private static readonly string[] WhoChoices = { "admins", "everyone", "nobody" };
+    private static readonly string[] WhoNoNobodyChoices = { "admins", "everyone" };
+    private static readonly string[] KickChoices =
+        { "admins", "admins_vote", "everyone", "everyone_vote", "nobody" };
+
+    /// <summary>Fill every policy combo with its allowed values and default selection. Combos are
+    /// populated with the RAW policy tokens ("admins"/"everyone"/…); the displayed text is the raw
+    /// token too — they are the same words the web client's fieldset shows, and a policy builder
+    /// that lies about its values is worse than one that shows the protocol.</summary>
+    private void PopulatePolicyCombos()
+    {
+        foreach (var (combo, choices, def) in new[]
+                 {
+                     (RecordingPolicy, WhoChoices, "admins"),
+                     (ShareAudioPolicy, WhoChoices, "everyone"),
+                     (StreamAudioPolicy, WhoChoices, "everyone"),
+                     (DuckingPolicy, WhoNoNobodyChoices, "everyone"),
+                     (LiveStreamingPolicy, WhoChoices, "admins"),
+                     (ApproveJoinsPolicy, WhoNoNobodyChoices, "admins"),
+                     (ChatPolicy, WhoChoices, "everyone"),
+                     (NotesPolicy, WhoChoices, "everyone"),
+                     (MutePeerPolicy, WhoChoices, "admins"),
+                     (MuteAllPolicy, WhoChoices, "admins"),
+                     (KickPolicy, KickChoices, "admins"),
+                 })
+        {
+            combo.Items.Clear();
+            foreach (var c in choices) combo.Items.Add(c);
+            combo.SelectedItem = def;
+        }
+    }
+
+    /// <summary>Build the moderation policy from the fieldset, or null when the expander is closed
+    /// (an ordinary room — the join field is then omitted entirely).</summary>
+    private ModerationPolicy? BuildModerationPolicy()
+    {
+        if (AdminOptionsExpander.IsExpanded != true) return null;
+        static string Sel(ComboBox c) => c.SelectedItem as string ?? "everyone";
+        return new ModerationPolicy
+        {
+            MultipleAdmins = MultipleAdminsCheck.IsChecked == true,
+            HidePoweredBy = HidePoweredByCheck.IsChecked == true,
+            Recording = Sel(RecordingPolicy),
+            ShareAudio = Sel(ShareAudioPolicy),
+            StreamAudio = Sel(StreamAudioPolicy),
+            Ducking = Sel(DuckingPolicy),
+            LiveStreaming = Sel(LiveStreamingPolicy),
+            ApproveJoins = Sel(ApproveJoinsPolicy),
+            Chat = Sel(ChatPolicy),
+            Notes = Sel(NotesPolicy),
+            MutePeer = Sel(MutePeerPolicy),
+            MuteAll = Sel(MuteAllPolicy),
+            Kick = Sel(KickPolicy),
+        };
     }
 
     // ---- public rooms list ----------------------------------------------------------------------
@@ -325,7 +475,7 @@ public sealed partial class MainWindow : Window
     // Combo index → (WaveIn/WaveOut device number, product name); slot 0 is the Windows default.
     private List<(int Index, string Name)> _micDevices = new();
     private List<(int Index, string Name)> _speakerDevices = new();
-    private MicCapture? _testCap;
+    private IMicrophoneCapture? _testCap;
     private WaveOutEvent? _testOut;
     private BufferedWaveProvider? _testBuf;
     private int _testFrameCount;
@@ -338,6 +488,7 @@ public sealed partial class MainWindow : Window
         MicSelect.Items.Add(I18n.T("system_default"));
         foreach (var (_, name) in _micDevices.Skip(1)) MicSelect.Items.Add(name);
         var idx = preferName is null or "System default" ? 0 : _micDevices.FindIndex(d => d.Name == preferName);
+        _rememberedMicUnavailable = preferName is not null and not "System default" && idx < 0;
         MicSelect.SelectedIndex = idx >= 0 ? idx : 0;
     }
 
@@ -349,6 +500,7 @@ public sealed partial class MainWindow : Window
         SpeakerSelect.Items.Add(I18n.T("system_default"));
         foreach (var (_, name) in _speakerDevices.Skip(1)) SpeakerSelect.Items.Add(name);
         var idx = preferName is null or "System default" ? 0 : _speakerDevices.FindIndex(d => d.Name == preferName);
+        _rememberedSpeakerUnavailable = preferName is not null and not "System default" && idx < 0;
         SpeakerSelect.SelectedIndex = idx >= 0 ? idx : 0;
     }
 
@@ -389,6 +541,11 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        StartMicTest(announceStart: true);
+    }
+
+    private void StartMicTest(bool announceStart)
+    {
         var (dev, name) = SelectedMic();
         try
         {
@@ -397,12 +554,38 @@ public sealed partial class MainWindow : Window
             _testOut = new WaveOutEvent { DesiredLatency = 120, DeviceNumber = SelectedSpeaker().Index };
             _testOut.Init(_testBuf);
             _testOut.Play();
-            _testCap = new MicCapture(dev);
-            _testCap.FrameReady += OnTestFrame;
-            _testCap.Start();
+            if (VoiceProcessingLobbyCheck.IsChecked == true)
+            {
+                try
+                {
+                    var capture = VoiceDeviceMapper.MapCapture(dev);
+                    var render = VoiceDeviceMapper.MapRender(SelectedSpeaker().Index);
+                    if (capture.FellBack) Announce(I18n.T("remembered_mic_unavailable"));
+                    if (render.FellBack) Announce(I18n.T("remembered_speaker_unavailable"));
+                    _testCap = new ProcessedMicCapture(capture.EndpointIndex, render.EndpointIndex);
+                    _testCap.FrameReady += OnTestFrame;
+                    _testCap.Start();
+                }
+                catch (Exception ex)
+                {
+                    var hr = System.Runtime.InteropServices.Marshal.GetHRForException(ex);
+                    Diag.Log($"Mic test voice processing unavailable (HRESULT 0x{hr:X8})", ex);
+                    _testCap?.Dispose();
+                    _testCap = null;
+                    SyncVoiceProcessingChecks(false);
+                    SaveSettings();
+                    Announce(I18n.T("voice_processing_unavailable"));
+                }
+            }
+            if (_testCap is null)
+            {
+                _testCap = new MicCapture(dev);
+                _testCap.FrameReady += OnTestFrame;
+                _testCap.Start();
+            }
             MicTestButton.Content = I18n.T("mic_test_stop");
             MicTestButton.IsChecked = true;
-            Announce(I18n.F("testing_mic", name));
+            if (announceStart) Announce(I18n.F("testing_mic", name));
         }
         catch (Exception ex)
         {
@@ -634,6 +817,14 @@ public sealed partial class MainWindow : Window
         var session = new RoomSession();
         _session = session;
         session.Log += s => { Diag.Log($"[session] {s}"); Enqueue(() => CallStatus.Text = s); };
+        session.VoiceProcessingUnavailable += _ => Enqueue(() =>
+        {
+            SyncVoiceProcessingChecks(false);
+            SaveSettings();
+            Announce(I18n.T("voice_processing_unavailable"));
+        });
+        session.VoiceDeviceFallback += device => Enqueue(() => Announce(I18n.T(
+            device == "microphone" ? "remembered_mic_unavailable" : "remembered_speaker_unavailable")));
         session.PeerJoined += p => Enqueue(() =>
         {
             if (Find(p.PeerId) is null) _peers.Add(TrackRowLabel(new PeerItem(p.PeerId, p.DisplayName)));
@@ -778,7 +969,22 @@ public sealed partial class MainWindow : Window
             if (_inCall && !string.IsNullOrEmpty(title))
                 AnnounceEvent(I18n.F("now_streaming", name, title!));
         });
+        session.FilePlaybackEnded += error => Enqueue(() =>
+        {
+            FileButton.Content = I18n.T("play_file");
+            ChangeFileButton.Visibility = Visibility.Collapsed;
+            if (!_inCall) return;
+            if (string.IsNullOrEmpty(error)) AnnounceEvent(I18n.T("media_finished"));
+            else Announce(I18n.F("file_failed", error));
+        });
         session.JoinPending += () => Enqueue(() => Announce(I18n.T("waiting_admit")));
+        // A reserved room refused us: its host has not opened it yet. The session polls and
+        // re-joins by itself, so this is a status line, not an error.
+        session.AwaitingHost += (roomName, _) => Enqueue(() =>
+        {
+            ConnectStatus.Text = I18n.T("awaiting_host");
+            Announce(I18n.T("awaiting_host"));
+        });
         session.RoomBecamePublic += () => Enqueue(() =>
         {
             UpdateKickVisibility();
@@ -799,9 +1005,49 @@ public sealed partial class MainWindow : Window
             else if (v.Action == "withdraw") Announce(I18n.F("withdrew_kick", voter, target));
             // "recount" (membership change) stays silent, like the web client.
         });
-        session.PeerKickedEvent += (name, reason) => Enqueue(() =>
-            AnnounceEvent(reason == "caster" ? I18n.F("caster_removed", name) : I18n.F("removed_by_vote", name)));
+        session.PeerKickedEvent += (name, reason, by) => Enqueue(() => AnnounceEvent(reason switch
+        {
+            "caster" => I18n.F("caster_removed", name),
+            "admin" => I18n.F("removed_by_admin", name, string.IsNullOrEmpty(by) ? I18n.T("a_participant") : by!),
+            _ => I18n.F("removed_by_vote", name),
+        }));
         session.YouWereKicked += () => Enqueue(ShowKicked);
+
+        // Shared notes: created by us or by someone else; the label flips to "open".
+        session.NotesAvailable += (url, by) => Enqueue(() =>
+        {
+            NotesButton.Content = I18n.T("open_notes");
+            AnnounceEvent(by is null
+                ? I18n.T("notes_available")
+                : I18n.F("notes_opened_by", by));
+        });
+
+        // Moderated rooms: the admin set changed — re-flag the rows and re-apply every gate.
+        session.AdminsChanged += v => Enqueue(() =>
+        {
+            foreach (var p in _peers) ApplyRowAdminGates(p);
+            ApplyModerationGates();
+            if (v.Change is { } c && string.IsNullOrEmpty(c.By))
+                AnnounceEvent(I18n.F("admin_granted", c.DisplayName));
+            else if (v.Change is { } c2 && c2.Reason == "revoked")
+                AnnounceEvent(I18n.F("admin_revoked", c2.DisplayName));
+        });
+        // The last admin left: every control comes back by itself.
+        session.ModerationEnded += () => Enqueue(() =>
+        {
+            foreach (var p in _peers) { p.IsAdmin = false; ApplyRowAdminGates(p); }
+            ApplyModerationGates();
+            AnnounceEvent(I18n.T("moderation_ended"));
+        });
+        // A forced mute is SOFT: the server paused my producer, I reflect it and may still unmute.
+        session.ForceMutedBy += by => Enqueue(() =>
+        {
+            MuteButton.IsChecked = true;
+            Announce(string.IsNullOrEmpty(by) ? I18n.T("you_were_muted") : I18n.F("you_were_muted_by", by!));
+        });
+        session.AllMutedBy += (by, _) => Enqueue(() =>
+            AnnounceEvent(I18n.F("mute_all_done", string.IsNullOrEmpty(by) ? I18n.T("a_participant") : by!)));
+
         session.JoinRequestsChanged += reqs => Enqueue(() =>
         {
             _pendingJoinRequests = reqs.Count;
@@ -818,15 +1064,21 @@ public sealed partial class MainWindow : Window
         SaveSettings();
 
         session.HifiVoice = HifiCheck.IsChecked == true;
-        session.MicGain = (float)MicGainSlider.Value;
+        session.VoiceProcessingEnabled = VoiceProcessingLobbyCheck.IsChecked == true;
+        session.MicGain = (float)ToGain(MicGainSlider.Value);
+        session.MediaVolume = (float)ToGain(MediaVolumeSlider.Value);
 
         var room = RoomBox.Text.Trim();
+        var hostKey = HostKeyBox.Text.Trim();
+        var moderation = BuildModerationPolicy();
         try
         {
             await session.ConnectAsync(
                 ServerBox.Text.Trim(), room, NameBox.Text.Trim(),
                 ListenOnlyCheck.IsChecked == true, PublicCheck.IsChecked == true,
-                mic.Index, speaker.Index);
+                mic.Index, speaker.Index,
+                string.IsNullOrEmpty(hostKey) ? null : hostKey,
+                moderation);
 
             _serverUrl = ServerBox.Text.Trim().TrimEnd('/');
             _roomName = room;
@@ -836,11 +1088,18 @@ public sealed partial class MainWindow : Window
             StreamButton.Content = session.IsStreaming ? I18n.T("stop_streaming") : I18n.T("stream");
             DuckButton.IsChecked = session.DuckingEnabled;
             MicGainSlider.IsEnabled = ListenOnlyCheck.IsChecked != true;
+            VoiceProcessingCallCheck.IsEnabled = ListenOnlyCheck.IsChecked != true;
             UpdateDownloadVisibility();
             ConnectScroll.Visibility = Visibility.Collapsed;
             CallPanel.Visibility = Visibility.Visible;
             UpdateKickVisibility();
+            ApplyModerationGates();
             _speakTimer?.Start();
+
+            // Land the keyboard on Mute, the control you need most in a call. The Join button
+            // that was just pressed lives in the now-collapsed lobby, so without this the caret
+            // is stranded there and the first Tab walks the invisible lobby instead of the room.
+            MuteButton.Focus(FocusState.Programmatic);
 
             var others = session.PeerNames.Count;
             Announce(others == 0
@@ -957,18 +1216,26 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnMasterVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
-        => _session?.SetMasterVolume((float)e.NewValue);
+        => _session?.SetMasterVolume((float)ToGain(e.NewValue));
 
     private void OnMicGainChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
-        if (_session is not null) _session.MicGain = (float)e.NewValue;
+        if (_session is not null) _session.MicGain = (float)ToGain(e.NewValue);
+    }
+
+    private void OnMediaVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (_session is not null) _session.MediaVolume = (float)ToGain(e.NewValue);
     }
 
     private void OnPeerVolumeChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is PeerItem item)
-            _session?.SetPeerVolume(item.PeerId, (float)e.NewValue);
+            _session?.SetPeerVolume(item.PeerId, (float)ToGain(e.NewValue));
     }
+
+    private static double ToPercent(double gain) => gain * PercentScale;
+    private static double ToGain(double percent) => percent / PercentScale;
 
     private void OnLocalMuteClick(object sender, RoutedEventArgs e)
     {
@@ -1391,7 +1658,7 @@ public sealed partial class MainWindow : Window
             AnnounceEvent(I18n.T("you_stopped_file"));
             return;
         }
-        await PickAndStreamFileAsync(swap: false);
+        await PickAndStreamMediaAsync(swap: false);
     }
 
     /// <summary>Swap the streamed file on the LIVE producer — listeners keep one continuous
@@ -1399,25 +1666,65 @@ public sealed partial class MainWindow : Window
     private async void OnChangeFileClick(object sender, RoutedEventArgs e)
     {
         if (_session is null || !_session.IsStreamingFile) return;
-        await PickAndStreamFileAsync(swap: true);
+        await PickAndStreamMediaAsync(swap: true);
     }
 
-    private async System.Threading.Tasks.Task PickAndStreamFileAsync(bool swap)
+    private async System.Threading.Tasks.Task PickAndStreamMediaAsync(bool swap)
     {
-        var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-        foreach (var ext in new[] { ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma" })
-            picker.FileTypeFilter.Add(ext);
+        var urlBox = Named(new TextBox
+        {
+            Header = I18n.T("media_url"),
+            PlaceholderText = "https://example.com/media.mp4",
+        }, I18n.T("media_url"));
+        var panel = new StackPanel { Spacing = 8, MinWidth = 420 };
+        panel.Children.Add(new TextBlock { Text = I18n.T("media_url_hint"), TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(urlBox);
+        var dialog = new ContentDialog
+        {
+            Title = I18n.T("media_dialog_title"),
+            Content = panel,
+            PrimaryButtonText = I18n.T("choose_file"),
+            SecondaryButtonText = I18n.T("play_file"),
+            CloseButtonText = I18n.T("cancel"),
+            DefaultButton = ContentDialogButton.Secondary,
+            XamlRoot = ((FrameworkElement)Content).XamlRoot,
+        };
 
-        var file = await picker.PickSingleFileAsync();
-        if (file is null || _session is null) return;
+        var result = await dialog.ShowAsync();
+        if (result == ContentDialogResult.None || _session is null) return;
+
+        string source;
+        string title;
+        if (result == ContentDialogResult.Primary)
+        {
+            var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.FileTypeFilter.Add("*");
+            var file = await picker.PickSingleFileAsync();
+            if (file is null || _session is null) return;
+            source = file.Path;
+            title = file.Name;
+        }
+        else
+        {
+            var value = urlBox.Text.Trim();
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                Announce(I18n.T("invalid_media_url"));
+                return;
+            }
+            source = uri.AbsoluteUri;
+            title = Uri.UnescapeDataString(Path.GetFileName(uri.AbsolutePath));
+            if (string.IsNullOrWhiteSpace(title)) title = uri.Host;
+        }
 
         try
         {
-            await _session.StartFileAsync(file.Path, file.Name);
+            title = await _session.StartFileAsync(source, title);
             FileButton.Content = I18n.T("stop_file");
             ChangeFileButton.Visibility = Visibility.Visible;
-            AnnounceEvent(swap ? I18n.F("you_swapped_file", file.Name) : I18n.F("playing_file", file.Name));
+            AnnounceEvent(swap ? I18n.F("you_swapped_file", title) : I18n.F("playing_file", title));
         }
         catch (Exception ex) { Announce(I18n.F("file_failed", ex.Message)); }
     }
@@ -1450,6 +1757,173 @@ public sealed partial class MainWindow : Window
     {
         var can = _session is { RoomIsPublic: true } && _session.VotableCount >= 3;
         foreach (var p in _peers) p.CanKick = can;
+    }
+
+    // ---- moderated rooms (admin gates + actions) ------------------------------------------------
+
+    /// <summary>
+    /// Apply the room's privilege policy to every control. A control the user may not use is
+    /// REMOVED from the toolbar (not just disabled), so a screen-reader user never walks onto a
+    /// control that will always be refused — the web client's rule. The server re-checks every
+    /// one of these regardless, so this is presentation, never enforcement.
+    ///
+    /// Re-evaluated on join, on <c>admins-changed</c>, and when <c>moderation-ended</c> restores
+    /// every control by itself.
+    /// </summary>
+    private void ApplyModerationGates()
+    {
+        var s = _session;
+        if (s is null) return;
+
+        ModBadge.Visibility = s.IsModerated ? Visibility.Visible : Visibility.Collapsed;
+
+        // Individual controls, hidden when denied.
+        RecordButton.Visibility = s.Can(Moderation.Recording) ? Visibility.Visible : Visibility.Collapsed;
+        ShareButton.Visibility = s.Can(Moderation.ShareAudio) ? Visibility.Visible : Visibility.Collapsed;
+        ExtraMicButton.Visibility = s.Can(Moderation.StreamAudio) ? Visibility.Visible : Visibility.Collapsed;
+        FileButton.Visibility = s.Can(Moderation.StreamAudio) ? Visibility.Visible : Visibility.Collapsed;
+        ChangeFileButton.Visibility = s.IsStreamingFile && s.Can(Moderation.StreamAudio)
+            ? Visibility.Visible : Visibility.Collapsed;
+        DuckButton.Visibility = s.Can(Moderation.Ducking) ? Visibility.Visible : Visibility.Collapsed;
+        StreamButton.Visibility = s.Can(Moderation.LiveStreaming) ? Visibility.Visible : Visibility.Collapsed;
+
+        // Notes: only if the server has NOTELAB_URL AND the policy allows us.
+        var notesAllowed = s.NotesEnabled && s.Can(Moderation.Notes);
+        NotesButton.Visibility = notesAllowed ? Visibility.Visible : Visibility.Collapsed;
+        NotesButton.Content = s.NotesUrl is null ? I18n.T("notes") : I18n.T("open_notes");
+
+        // Chat may be off entirely; the panel stays because announcements live there, but the
+        // composer is disabled and says why.
+        var chatAllowed = s.Can(Moderation.Chat);
+        ChatInput.IsEnabled = chatAllowed;
+        SendButton.IsEnabled = chatAllowed;
+        ChatInput.PlaceholderText = chatAllowed
+            ? I18n.T("message_placeholder")
+            : I18n.T(s.IsModerated ? "chat_admins_only" : "chat_disabled");
+
+        // Mute everyone: moderated rooms only, and only when the policy allows it.
+        MuteAllButton.Visibility = s.IsModerated && s.Can(Moderation.MuteAll)
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        foreach (var p in _peers) ApplyRowAdminGates(p);
+    }
+
+    /// <summary>Per-row admin gates. Mirrors the server's own refusals so the buttons only appear
+    /// where they will work: not yourself, not a caster, an admin only by another admin.</summary>
+    private void ApplyRowAdminGates(PeerItem item)
+    {
+        var s = _session;
+        if (s is null) { item.CanMutePeer = item.CanSetAdmin = item.CanAdminRemove = false; return; }
+
+        var isMe = item.PeerId == s.MyPeerId;
+        var isCaster = s.IsCaster(item.PeerId);
+        var isAdmin = s.IsAdminPeer(item.PeerId);
+        item.IsAdmin = isAdmin;
+
+        // I may mute others, but never myself, never a caster, and an admin only by another admin.
+        item.CanMutePeer = !isMe && !isCaster && s.Can(Moderation.MutePeer) && (!isAdmin || s.IsAdmin);
+
+        // Naming needs me to be an admin, the room to allow several, and not me / not a caster.
+        item.CanSetAdmin = !isMe && !isCaster && s.IsAdmin
+            && s.Moderation?.MultipleAdmins == true;
+
+        // Direct removal only exists in a moderated room whose kick mode is direct for me.
+        item.CanAdminRemove = s.IsModerated && s.MyKickMode == "direct"
+            && !isMe && !isCaster && (!isAdmin || s.IsAdmin);
+    }
+
+    private async void OnNotesClick(object sender, RoutedEventArgs e)
+    {
+        if (_session is null) return;
+        if (!_session.Can(Moderation.Notes))
+        {
+            Announce(I18n.T("not_allowed"));
+            return;
+        }
+        // A known URL opens straight away; otherwise the server creates the note on first use.
+        var url = _session.NotesUrl ?? await _session.OpenNotesAsync();
+        if (url is null)
+        {
+            // Each refusal has its own message: gated by policy, no NoteLab here, or unreachable.
+            Announce(I18n.T(_session.NotesError switch
+            {
+                "notes_disabled" => "notes_disabled",
+                "forbidden" => "not_allowed",
+                _ => "notes_failed",
+            }));
+            return;
+        }
+        LaunchBrowser(url);
+        AnnounceEvent(I18n.T("notes_opened"));
+    }
+
+    /// <summary>Open a URL in the user's default browser (the NoteLab note lives on the web).</summary>
+    private static void LaunchBrowser(string url)
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true };
+            System.Diagnostics.Process.Start(psi);
+        }
+        catch (Exception ex) { Diag.Log("LaunchBrowser", ex); }
+    }
+
+    private async void OnMuteAllClick(object sender, RoutedEventArgs e)
+    {
+        if (_session is null) return;
+        try
+        {
+            await _session.MuteAllAsync();
+            // Success announces via the all-muted broadcast.
+        }
+        catch (Exception ex) { Announce(I18n.F("admin_action_failed", ex.Message)); }
+    }
+
+    private async void OnMutePeerClick(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || (sender as FrameworkElement)?.DataContext is not PeerItem item) return;
+        var dlg = new ContentDialog
+        {
+            Title = I18n.T("mute_peer_title"),
+            Content = new TextBlock { Text = I18n.F("mute_peer_confirm", item.DisplayName), TextWrapping = TextWrapping.Wrap },
+            PrimaryButtonText = I18n.T("mute"),
+            CloseButtonText = I18n.T("cancel"),
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = ((FrameworkElement)Content).XamlRoot,
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        try { await _session.MutePeerAsync(item.PeerId); }
+        catch (Exception ex) { Announce(I18n.F("admin_action_failed", ex.Message)); }
+    }
+
+    private async void OnSetAdminClick(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || (sender as FrameworkElement)?.DataContext is not PeerItem item) return;
+        try
+        {
+            // Flipping their current admin state: the label already says make/revoke.
+            await _session.SetAdminAsync(item.PeerId, !item.IsAdmin);
+            AnnounceEvent(I18n.F(item.IsAdmin ? "admin_revoked" : "admin_granted", item.DisplayName));
+        }
+        catch (Exception ex) { Announce(I18n.F("admin_action_failed", ex.Message)); }
+    }
+
+    private async void OnAdminRemoveClick(object sender, RoutedEventArgs e)
+    {
+        if (_session is null || (sender as FrameworkElement)?.DataContext is not PeerItem item) return;
+        var dlg = new ContentDialog
+        {
+            Title = I18n.T("remove_from_room_title"),
+            Content = new TextBlock { Text = I18n.F("remove_from_room_confirm", item.DisplayName), TextWrapping = TextWrapping.Wrap },
+            PrimaryButtonText = I18n.T("remove"),
+            CloseButtonText = I18n.T("cancel"),
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = ((FrameworkElement)Content).XamlRoot,
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        try { await _session.KickPeerAsync(item.PeerId); }
+        catch (Exception ex) { Announce(I18n.F("admin_action_failed", ex.Message)); }
+        // Success announces via the peer-kicked broadcast (reason "admin").
     }
 
     /// <summary>Keep the row's UIA name in sync as mute/vote state changes after realization.</summary>

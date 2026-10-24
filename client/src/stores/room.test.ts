@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ChatMessage } from "../lib/chat";
-import { isIOS } from "../lib/microphone";
 import {
   useRoomStore,
   isPinned,
@@ -44,7 +43,7 @@ beforeEach(() => {
     streamMonitorVolume: 0.5,
     micDeviceId: "",
     speakerDeviceId: "",
-    voiceProcessingEnabled: isIOS,
+    voiceProcessingEnabled: true,
     hifiVoiceEnabled: false,
     streamedMicDeviceIds: [],
     micStereoByDevice: {},
@@ -495,10 +494,8 @@ describe("persistence loaders (fresh module init)", () => {
   });
 
   describe("loadVoiceProcessing", () => {
-    it("defaults to isIOS when unset", async () => {
-      const v = (await freshStore()).getState().voiceProcessingEnabled;
-      expect(typeof v).toBe("boolean");
-      expect(v).toBe(isIOS);
+    it("defaults to on when unset", async () => {
+      expect((await freshStore()).getState().voiceProcessingEnabled).toBe(true);
     });
     it('honors "true"', async () => {
       localStorage.setItem(KEYS.voiceProcessing, "true");
@@ -769,7 +766,7 @@ describe("reset", () => {
     s.setSpeakerDeviceId("spk-x");
     s.setMicGain(3);
     s.setStreamMonitorVolume(0.9);
-    s.setVoiceProcessingEnabled(!isIOS);
+    s.setVoiceProcessingEnabled(false);
     s.setHifiVoiceEnabled(true);
     s.setStreamedMicDeviceIds(["a", "b"]);
     s.setMicStereoForDevice("a", true);
@@ -852,7 +849,7 @@ describe("reset", () => {
     expect(st.speakerDeviceId).toBe("spk-x");
     expect(st.micGain).toBe(3);
     expect(st.streamMonitorVolume).toBe(0.9);
-    expect(st.voiceProcessingEnabled).toBe(!isIOS);
+    expect(st.voiceProcessingEnabled).toBe(false);
     expect(st.hifiVoiceEnabled).toBe(true);
     expect(st.streamedMicDeviceIds).toEqual(["a", "b"]);
     expect(st.micStereoByDevice).toEqual({ a: true });
