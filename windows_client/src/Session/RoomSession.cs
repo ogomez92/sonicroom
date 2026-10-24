@@ -630,8 +630,11 @@ public sealed class RoomSession : IAsyncDisposable
         _sig.OnAdminsChanged += v =>
         {
             if (v.Change is { } c && c.PeerId == MyPeerId) IsAdmin = c.IsAdmin;
-            lock (_map) _admins.Clear();
-            foreach (var a in v.Admins) _admins[a.PeerId] = a.DisplayName;
+            lock (_map)
+            {
+                _admins.Clear();
+                foreach (var a in v.Admins) _admins[a.PeerId] = a.DisplayName;
+            }
             AdminsChanged?.Invoke(v);
         };
         // The last admin left: the room is no longer moderated, so every control comes back.
