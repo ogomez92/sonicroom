@@ -1165,6 +1165,8 @@ describe("reserved rooms", () => {
     });
     await expect(joinPromise!).rejects.toThrow("banned");
     expect(useRoomStore.getState().awaitingHost).toBe(false);
+    // The failed session is torn down, so socket.io can't reconnect + re-join.
+    expect(socket().connected).toBe(false);
     hook.unmount();
   });
 });
