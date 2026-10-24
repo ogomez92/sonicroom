@@ -28,6 +28,8 @@ import {
   announce_moderation_ended,
   announce_peer_kicked_by,
   announce_you_were_kicked_by,
+  announce_media_connection_lost,
+  announce_media_connection_restored,
 } from "../paraglide/messages.js";
 import { DEFAULT_MODERATION_POLICY } from "../lib/moderation";
 
@@ -236,6 +238,39 @@ describe("P2P signaling relay", () => {
     await runAct(() => pc.fireIceCandidate(new FakeIceCandidate({ candidate: "host" })));
     const signals = socket().sentEvents("p2p-signal") as Array<{ type: string }>;
     expect(signals.some((s) => s.type === "ice-candidate")).toBe(true);
+    h.unmount();
+  });
+});
+
+describe("media connection recovery", () => {
+  it("P2P offerer re-offers with an ICE restart on failure and announces it", async () => {
+    const h = await joinRoom({ join: { mode: "p2p", peers: [peerEntry("id-bob")] } });
+    const pc = FakeRTCPeerConnection.instances[0];
+    const offersBefore = socket()
+      .sentEvents("p2p-signal")
+      .filter((s) => (s as { type: string }).type === "offer").length;
+
+    await runAct(() => pc.setConnectionState("failed"));
+    expect(useRoomStore.getState().announcement).toBe(announce_media_connection_lost());
+    const offers = socket()
+      .sentEvents("p2p-signal")
+      .filter((s) => (s as { type: string }).type === "offer");
+    expect(offers).toHaveLength(offersBefore + 1);
+    // Same connection, restarted in place (no new PC on our side).
+    expect(FakeRTCPeerConnection.instances).toHaveLength(1);
+
+    await runAct(() => pc.setConnectionState("connected"));
+    expect(useRoomStore.getState().announcement).toBe(announce_media_connection_restored());
+    h.unmount();
+  });
+
+  it("SFU transport restarts ICE with the server's fresh parameters", async () => {
+    fakeServer.on("restart-ice", () => ({ ok: true, iceParameters: { usernameFragment: "new" } }));
+    const h = await sfuJoin([peerEntry("id-bob"), peerEntry("id-carol")]);
+    const recv = recvTransport();
+    await runAct(() => recv.handlers["connectionstatechange"]("failed"));
+    expect(socket().lastSent("restart-ice")).toEqual({ direction: "recv" });
+    expect(recv.iceRestarts).toEqual([{ usernameFragment: "new" }]);
     h.unmount();
   });
 });

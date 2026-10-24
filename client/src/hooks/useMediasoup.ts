@@ -47,6 +47,8 @@ import {
   announce_video_on,
   announce_video_off,
   announce_room_now_video,
+  announce_media_connection_lost,
+  announce_media_connection_restored,
   announce_screen_started,
   announce_screen_stopped,
   announce_screen_started_you,
@@ -226,6 +228,22 @@ export function useMediasoup() {
     );
     return run;
   }, []);
+
+  // A P2P connection or SFU transport hit ICE "failed" and we said so; the
+  // next one to reach "connected" announces the recovery.
+  const mediaLostRef = useRef(false);
+  const noteMediaState = useCallback(
+    (state: RTCPeerConnectionState) => {
+      if (state === "failed" && !mediaLostRef.current) {
+        mediaLostRef.current = true;
+        store.getState().announce(announce_media_connection_lost());
+      } else if (state === "connected" && mediaLostRef.current) {
+        mediaLostRef.current = false;
+        store.getState().announce(announce_media_connection_restored());
+      }
+    },
+    [store],
+  );
 
   const emit = useCallback(
     <T>(event: string, data?: unknown): Promise<T> =>
@@ -579,6 +597,21 @@ export function useMediasoup() {
         registry.attachP2pTrack(peerId, e.track);
       };
 
+      // ICE gave up (network change, NAT rebinding): the offerer re-offers with
+      // an ICE restart; the answerer's offer handler builds a fresh PC for it.
+      pc.onconnectionstatechange = () => {
+        if (p2pConnectionsRef.current.get(peerId) !== pc) return;
+        noteMediaState(pc.connectionState);
+        if (pc.connectionState !== "failed" || !isOfferer) return;
+        void runTransition(async () => {
+          if (modeRef.current !== "p2p" || p2pConnectionsRef.current.get(peerId) !== pc) return;
+          const offer = await pc.createOffer({ iceRestart: true });
+          offer.sdp = forceOpusParams(offer.sdp!, useRoomStore.getState().hifiVoiceEnabled);
+          await pc.setLocalDescription(offer);
+          socket.emit("p2p-signal", { targetPeerId: peerId, type: "offer", payload: offer });
+        }).catch((err) => console.error("[p2p] ICE restart failed:", err));
+      };
+
       p2pConnectionsRef.current.set(peerId, pc);
 
       if (isOfferer) {
@@ -597,7 +630,7 @@ export function useMediasoup() {
 
       return pc;
     },
-    [ensureLocalStream, connectMicToGraph, graph, registry],
+    [ensureLocalStream, connectMicToGraph, graph, registry, noteMediaState, runTransition],
   );
 
   // Apply candidates that were queued for a peer while its connection had no
@@ -670,6 +703,26 @@ export function useMediasoup() {
   // (registry.removeShareStream / removeFileStream / removeMicStream).
 
   // --- SFU: set up transports and produce ---
+  // SFU transport ICE failed: ask the server for fresh ICE parameters and
+  // restart ICE on that transport (producers/consumers survive it).
+  const watchTransport = useCallback(
+    (transport: Transport, direction: "send" | "recv") => {
+      transport.on("connectionstatechange", (state) => {
+        noteMediaState(state);
+        if (state !== "failed") return;
+        emit<{ iceParameters: Parameters<Transport["restartIce"]>[0]["iceParameters"] }>(
+          "restart-ice",
+          { direction },
+        )
+          .then(({ iceParameters }) => {
+            if (!transport.closed) return transport.restartIce({ iceParameters });
+          })
+          .catch((err) => console.error(`[sfu] ${direction} ICE restart failed:`, err));
+      });
+    },
+    [emit, noteMediaState],
+  );
+
   const setupSfuInner = useCallback(
     async (rtpCapabilities: Record<string, unknown>) => {
       // Re-acquires the mic if its track died (e.g. iOS killed it during the
@@ -730,6 +783,7 @@ export function useMediasoup() {
       });
 
       sendTransportRef.current = sendTransport;
+      watchTransport(sendTransport, "send");
 
       // Create recv transport
       const recvRes = await emit<{ ok: boolean; params: Record<string, unknown> }>(
@@ -751,6 +805,7 @@ export function useMediasoup() {
       });
 
       recvTransportRef.current = recvTransport;
+      watchTransport(recvTransport, "recv");
 
       // Produce the processed outgoing track (mic gain + limiter, + shared audio).
       // Voice is mono ~64k by default; the per-user hi-fi opt-in sends stereo
@@ -792,7 +847,7 @@ export function useMediasoup() {
       await registry.drainPending();
       await videoRef.current?.drainPending();
     },
-    [emit, connectMicToGraph, ensureLocalStream, graph, extraMics, registry, store],
+    [emit, connectMicToGraph, ensureLocalStream, graph, extraMics, registry, store, watchTransport],
   );
 
   // setupSfu never leaves a half-built SFU behind on failure — a live-but-

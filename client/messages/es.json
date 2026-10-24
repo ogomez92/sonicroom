@@ -311,6 +311,8 @@
   "announce_video_on": "{name} ha activado su vídeo",
   "announce_video_off": "{name} ha desactivado su vídeo",
   "announce_video_failed": "No se pudo iniciar tu cámara",
+  "announce_media_connection_lost": "Se perdió la conexión de audio. Reconectando…",
+  "announce_media_connection_restored": "Conexión de audio restablecida",
   "announce_room_now_video": "Esta sala ahora es una videollamada",
   "announce_screen_started": "{name} ha empezado a compartir su pantalla",
   "announce_screen_stopped": "{name} ha dejado de compartir su pantalla",
