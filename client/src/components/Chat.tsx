@@ -3,6 +3,7 @@ import { Send, X } from "lucide-react";
 import { useRoomStore, type ChatAnnounceMode } from "../stores/room";
 import { relativeTime, messageContent, META_SEP } from "../lib/chat";
 import { warmUpTts } from "../lib/tts";
+import { useActiveById } from "../lib/active-by-id";
 import { m } from "../paraglide/messages.js";
 
 interface ChatProps {
@@ -30,7 +31,9 @@ export function Chat({ onSend, onClose, focusSignal, composer = "on" }: ChatProp
   const setChatAnnounceMode = useRoomStore((s) => s.setChatAnnounceMode);
   const [text, setText] = useState("");
   // Active listbox option (roving via aria-activedescendant). -1 = none yet.
-  const [activeIdx, setActiveIdx] = useState(-1);
+  // Tracked by message id: the history is capped, so old messages drop off
+  // the front and an index would slide onto a different message.
+  const [activeIdx, setActiveIdx] = useActiveById(messages, (msg) => msg.id);
   // Ticks so "x minutes ago" stays roughly fresh without per-message timers.
   const [now, setNow] = useState(() => Date.now());
 
@@ -48,11 +51,6 @@ export function Chat({ onSend, onClose, focusSignal, composer = "on" }: ChatProp
   useEffect(() => {
     textareaRef.current?.focus();
   }, [focusSignal]);
-
-  // Keep the active option valid as messages arrive or clear.
-  useEffect(() => {
-    setActiveIdx((i) => (i < 0 ? -1 : Math.min(i, messages.length - 1)));
-  }, [messages.length]);
 
   // While navigating, keep the active option visible; otherwise pin the newest.
   useEffect(() => {
