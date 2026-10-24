@@ -80,7 +80,9 @@ export function registerSfuHandlers(ctx: ConnectionContext) {
           // the peer's voice), "voice" (default) for the primary mic. VIDEO
           // rooms only: "camera" for a peer's webcam, "screen" for the video
           // half of their screen share.
-          source: z.enum(["voice", "music", "share", "file", "mic", "camera", "screen"]).optional(),
+          source: z
+            .enum(["voice", "music", "share", "file", "mic", "camera", "screen", "file-video"])
+            .optional(),
           // Human-readable detail for a media producer (extra-mic device name,
           // file name / URL), shown alongside the owner in the participant list.
           // Trusted only as a display string; capped so a peer can't flood it.
@@ -92,7 +94,7 @@ export function registerSfuHandlers(ctx: ConnectionContext) {
       // VIDEO room, and the kind must match the source (a "camera" producer is
       // video, everything else is audio) so a client can't smuggle a video
       // track under an audio label or vice versa.
-      const isVideoSource = source === "camera" || source === "screen";
+      const isVideoSource = source === "camera" || source === "screen" || source === "file-video";
       if (kind === "video" && !currentRoom.isVideo) {
         cb({ ok: false, error: "not_video_room" });
         return;
