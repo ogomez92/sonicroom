@@ -110,6 +110,9 @@ export class SpeakingDetector {
     // Forget detection state for tiles that have gone away.
     for (const key of this.speaking.keys()) {
       if (!this.registry.peerAudios.has(key)) {
+        // The pipeline went away mid-talk (e.g. cleanupAll on a mode switch):
+        // clear the store flag too, or it stays "speaking" until they talk again.
+        if (this.speaking.get(key)) this.store.getState().setPeerSpeaking(key, false);
         this.speaking.delete(key);
         this.speakLoudAt.delete(key);
       }
