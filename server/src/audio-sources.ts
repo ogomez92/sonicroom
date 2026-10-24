@@ -424,8 +424,13 @@ export function buildFfmpegVideoStreamArgs(url: string): string[] {
     "1",
     "-reconnect_streamed",
     "1",
+    // Retry 5xx too, like the audio pipeline: an IPTV proxy (Dispatcharr)
+    // answers "503 channel is stopping" for a moment when a channel is
+    // re-opened right after being closed (e.g. swapping the streamed URL).
+    "-reconnect_on_http_error",
+    "5xx",
     "-reconnect_delay_max",
-    "2",
+    "3",
     "-analyzeduration",
     "2000000",
     "-probesize",
