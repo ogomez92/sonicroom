@@ -98,6 +98,13 @@ export class PeerAudioRegistry {
   // Producers announced while the SFU transports were still being built —
   // consumed by drainPending() at the end of setupSfu instead of being dropped.
   private pending: PendingProducer[] = [];
+  // Consumes awaiting the server/transport, by producerId. A removal that lands
+  // meanwhile (owner left, stream stopped, teardown) flags the job cancelled so
+  // the late result is closed instead of becoming a ghost tile / leaked audio.
+  private readonly inflight = new Map<
+    string,
+    { peerId: string; source: string; cancelled: boolean }
+  >();
   // Whether the server currently reports a voice active (drives ducking). Seeded
   // by join from the snapshot; flipped by applyDuck.
   private voiceActive = false;
@@ -189,7 +196,21 @@ export class PeerAudioRegistry {
     }
     const pipeline = this.createPipeline(track);
     pipeline.gainNode.gain.value = this.effectiveGain(peerId);
-    this.peerAudios.set(peerId, pipeline);
+    this.replacePipeline(peerId, pipeline);
+  }
+
+  // Set a peer's pipeline, destroying any previous one (a re-offer / re-consume)
+  // so its audio element, nodes and consumer don't leak and keep playing.
+  private replacePipeline(key: string, pipeline: PeerAudio) {
+    const old = this.peerAudios.get(key);
+    if (old) this.destroyPipeline(old);
+    this.peerAudios.set(key, pipeline);
+  }
+
+  private cancelInflight(
+    match: (job: { peerId: string; source: string }, producerId: string) => boolean,
+  ) {
+    for (const [producerId, job] of this.inflight) if (match(job, producerId)) job.cancelled = true;
   }
 
   // SFU: consume a remote producer into a pipeline. Voice/music tiles are keyed by
@@ -206,19 +227,31 @@ export class PeerAudioRegistry {
       return;
     }
 
-    const res = await this.emit<ConsumeResult>("consume", {
-      producerId,
-      rtpCapabilities: device.recvRtpCapabilities,
-    });
+    const job = { peerId, source, cancelled: false };
+    this.inflight.set(producerId, job);
+    let consumer: Consumer;
+    try {
+      const res = await this.emit<ConsumeResult>("consume", {
+        producerId,
+        rtpCapabilities: device.recvRtpCapabilities,
+      });
 
-    const consumer = await recvTransport.consume({
-      id: res.consumerId,
-      producerId: res.producerId,
-      kind: res.kind as "audio",
-      rtpParameters: res.rtpParameters as Parameters<
-        typeof recvTransport.consume
-      >[0]["rtpParameters"],
-    });
+      consumer = await recvTransport.consume({
+        id: res.consumerId,
+        producerId: res.producerId,
+        kind: res.kind as "audio",
+        rtpParameters: res.rtpParameters as Parameters<
+          typeof recvTransport.consume
+        >[0]["rtpParameters"],
+      });
+    } finally {
+      if (this.inflight.get(producerId) === job) this.inflight.delete(producerId);
+    }
+    // The owner left or the stream was stopped while we waited: drop it.
+    if (job.cancelled || !this.store.getState().peers.has(peerId)) {
+      consumer.close();
+      return;
+    }
 
     if ("playoutDelayHint" in consumer.track) {
       (consumer.track as unknown as Record<string, number>).playoutDelayHint = 0;
@@ -254,7 +287,7 @@ export class PeerAudioRegistry {
       return;
     }
 
-    this.peerAudios.set(peerId, { ...pipeline, consumer });
+    this.replacePipeline(peerId, { ...pipeline, consumer });
 
     // Flag a music-caster peer (e.g. Ecobox) so the UI shows it as a media source.
     // The first time we learn this peer casts music, announce + log it — a
@@ -330,6 +363,7 @@ export class PeerAudioRegistry {
   }
 
   private removeStreamTile(producerId: string, owners: Map<string, string>) {
+    this.cancelInflight((_, id) => id === producerId);
     const pa = this.peerAudios.get(producerId);
     if (pa) {
       this.destroyPipeline(pa);
@@ -351,11 +385,13 @@ export class PeerAudioRegistry {
 
   // Drop every share tile owned by a peer (they stopped sharing).
   removeSharesOwnedBy(peerId: string) {
+    this.cancelInflight((job) => job.peerId === peerId && job.source === "share");
     for (const [producerId, owner] of this.shareOwners)
       if (owner === peerId) this.removeShareStream(producerId);
   }
   // Drop every file tile owned by a peer (they stopped their file stream).
   removeFilesOwnedBy(peerId: string) {
+    this.cancelInflight((job) => job.peerId === peerId && job.source === "file");
     for (const [producerId, owner] of this.fileOwners)
       if (owner === peerId) this.removeFileStream(producerId);
   }
@@ -364,6 +400,7 @@ export class PeerAudioRegistry {
   // plus every share/file/mic tile they own) — the audio half of a leave/kick. The
   // caller removes the peer itself from the store and closes any P2P connection.
   removePeerAudio(peerId: string) {
+    this.cancelInflight((job) => job.peerId === peerId);
     const pa = this.peerAudios.get(peerId);
     if (pa) {
       this.destroyPipeline(pa);
@@ -392,6 +429,7 @@ export class PeerAudioRegistry {
   // Destroy every pipeline and forget all owner mappings (P2P/SFU teardown). A
   // re-consume (mode switch / reconnect) rebuilds them cleanly.
   cleanupAll() {
+    this.cancelInflight(() => true);
     for (const pa of this.peerAudios.values()) this.destroyPipeline(pa);
     this.peerAudios.clear();
     this.shareOwners.clear();

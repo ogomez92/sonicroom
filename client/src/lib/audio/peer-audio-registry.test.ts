@@ -107,6 +107,7 @@ describe("PeerAudioRegistry — consume + pending queue", () => {
 
   it("queues a producer while the SFU isn't ready, then consumes it on drainPending", async () => {
     const { reg, emit, wireSfu } = makeRegistry();
+    useRoomStore.getState().addPeer("peer-a", "Ann");
 
     // No device/recvTransport yet → the consume is parked, nothing emitted.
     await reg.consumeProducer("peer-a", "prod-a", "voice");
@@ -137,6 +138,45 @@ describe("PeerAudioRegistry — consume + pending queue", () => {
     expect(reg.peerAudios.has("share-1")).toBe(false);
     expect(reg.streamOwner("share-1")).toBeUndefined();
     expect(useRoomStore.getState().peers.has("share-1")).toBe(false);
+  });
+
+  it("drops a consume that resolves after its stream was stopped", async () => {
+    const { reg, wireSfu } = makeRegistry();
+    const recv = wireSfu();
+    useRoomStore.getState().addPeer("peer-b", "Bob");
+
+    const late = reg.consumeProducer("peer-b", "share-2", "share");
+    reg.removeSharesOwnedBy("peer-b"); // share-stopped while the consume was in flight
+    await late;
+
+    expect(recv.consumers[0].closed).toBe(true);
+    expect(reg.peerAudios.has("share-2")).toBe(false);
+    expect(useRoomStore.getState().peers.has("share-2")).toBe(false); // no ghost tile
+  });
+
+  it("drops a consume whose owner left meanwhile", async () => {
+    const { reg, wireSfu } = makeRegistry();
+    const recv = wireSfu();
+    useRoomStore.getState().addPeer("peer-d", "Dee");
+
+    const late = reg.consumeProducer("peer-d", "prod-d", "voice");
+    useRoomStore.getState().removePeer("peer-d");
+    await late;
+
+    expect(recv.consumers[0].closed).toBe(true);
+    expect(reg.peerAudios.has("peer-d")).toBe(false);
+  });
+
+  it("destroys the old voice pipeline when a peer's voice is re-consumed", async () => {
+    const { reg, wireSfu } = makeRegistry();
+    const recv = wireSfu();
+    useRoomStore.getState().addPeer("peer-e", "Eve");
+
+    await reg.consumeProducer("peer-e", "prod-e1", "voice");
+    await reg.consumeProducer("peer-e", "prod-e2", "voice");
+
+    expect(recv.consumers[0].closed).toBe(true);
+    expect(recv.consumers[1].closed).toBe(false);
   });
 
   it("flags an incoming mic producer as a non-ducked mic tile (not isMusic)", async () => {

@@ -1197,6 +1197,12 @@ export function useMediasoup() {
           registry,
         });
         videoRef.current?.removeOwnedBy(peerId);
+        // Per-peer signaling/announcement state would otherwise pile up (and a
+        // pending coalesced mute line could still fire for someone who left).
+        offerSeqRef.current.delete(peerId);
+        const surface = surfaceRef.current.get(`peer:${peerId}`);
+        if (surface?.timer != null) clearTimeout(surface.timer);
+        surfaceRef.current.delete(`peer:${peerId}`);
         store.getState().removePeer(peerId);
         if (wasMusic) {
           // A music caster (e.g. Ecobox) going away reads as the music
