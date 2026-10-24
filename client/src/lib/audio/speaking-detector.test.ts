@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { rms, pushRecentSpeaker, nextSpeaking } from "./speaking-detector";
+import { rms, pushRecentSpeaker, nextSpeaking, SpeakingDetector } from "./speaking-detector";
+import type { PeerAudioRegistry, PeerAudio } from "./peer-audio-registry";
+import { useRoomStore } from "../../stores/room";
 
 describe("rms", () => {
   it("is 0 for silence", () => {
@@ -64,5 +66,26 @@ describe("nextSpeaking", () => {
       loudAt: undefined,
       speaking: false,
     });
+  });
+});
+
+describe("SpeakingDetector", () => {
+  it("clears a peer's speaking flag when their pipeline is forgotten mid-talk", () => {
+    useRoomStore.getState().reset();
+    useRoomStore.getState().addPeer("p1", "Pat");
+    const loud = {
+      fftSize: 16,
+      getFloatTimeDomainData: (b: Float32Array) => b.fill(0.5),
+    } as unknown as AnalyserNode;
+    const peerAudios = new Map<string, PeerAudio>([["p1", { analyser: loud } as PeerAudio]]);
+    const det = new SpeakingDetector(useRoomStore, { peerAudios } as unknown as PeerAudioRegistry);
+    const poll = () => (det as unknown as { poll(): void }).poll();
+
+    poll();
+    expect(useRoomStore.getState().peers.get("p1")?.isSpeaking).toBe(true);
+
+    peerAudios.clear(); // cleanupAll on a mode switch; the peer is still here
+    poll();
+    expect(useRoomStore.getState().peers.get("p1")?.isSpeaking).toBe(false);
   });
 });
