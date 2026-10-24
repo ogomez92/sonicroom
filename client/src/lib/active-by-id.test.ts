@@ -17,3 +17,22 @@ describe("resolveActiveIndex", () => {
     expect(resolveActiveIndex(["a"], { id: "z", idx: 3 })).toBe(0);
   });
 });
+
+describe("useActiveById", () => {
+  it("re-attaches to the row that took over, then follows it by id", async () => {
+    const { renderHook, act } = await import("@testing-library/react");
+    const { useActiveById } = await import("./active-by-id");
+    const { result, rerender } = renderHook(({ items }) => useActiveById(items, (x) => x), {
+      initialProps: { items: ["a", "b", "c", "d", "e"] },
+    });
+    act(() => result.current[1](2)); // on "c"
+    rerender({ items: ["a", "b", "d", "e"] }); // "c" left: "d" takes over row 2
+    expect(result.current[0]).toBe(2);
+    rerender({ items: ["b", "d", "e"] }); // "a" left above: stay on "d", not "e"
+    expect(result.current[0]).toBe(1);
+    rerender({ items: [] });
+    expect(result.current[0]).toBe(-1);
+    rerender({ items: ["z"] }); // emptied list does not come back pre-activated
+    expect(result.current[0]).toBe(-1);
+  });
+});

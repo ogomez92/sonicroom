@@ -20,7 +20,16 @@ export function resolveActiveIndex(ids: readonly string[], active: ActiveItem | 
 // with the same number-or-updater setter. -1 = none yet.
 export function useActiveById<T>(items: readonly T[], idOf: (item: T) => string) {
   const [active, setActive] = useState<ActiveItem | null>(null);
-  const activeIdx = resolveActiveIndex(items.map(idOf), active);
+  const ids = items.map(idOf);
+  const activeIdx = resolveActiveIndex(ids, active);
+  // The active item vanished and a neighbour took over (or the list emptied):
+  // re-attach to what is shown NOW, so it is followed by id from here on rather
+  // than by the dead item's old index. Adjusting state during render is React's
+  // pattern for state derived from props; it settles in one extra pass.
+  const shownId = activeIdx >= 0 ? ids[activeIdx] : null;
+  if (active && active.id !== shownId) {
+    setActive(shownId == null ? null : { id: shownId, idx: activeIdx });
+  }
   const setActiveIdx = (next: number | ((i: number) => number)) => {
     const n = typeof next === "function" ? next(activeIdx) : next;
     setActive(n >= 0 && n < items.length ? { id: idOf(items[n]), idx: n } : null);
