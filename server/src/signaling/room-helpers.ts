@@ -3,6 +3,7 @@ import type { Server, Socket } from "socket.io";
 import { removePeer, type Room, type Peer } from "../room-manager.js";
 import { decideMode } from "../recording-util.js";
 import { kickThreshold } from "../kick-util.js";
+import { clientIpFromHeaders } from "../admin.js";
 import { allowed, voteIsAdminsOnly } from "../moderation-util.js";
 import { CHAT_HISTORY_MAX, type ChatMessage } from "../chat-util.js";
 import type { RecordingManager } from "../recording.js";
@@ -17,16 +18,11 @@ export function closeSfuResources(peer: Peer) {
   peer.consumers.clear();
 }
 
-// Best-effort client IP for room-scoped knock bans. Behind the TLS-terminating
-// reverse proxy that fronts this server, the socket's own address is the proxy
-// (127.0.0.1), so prefer the left-most X-Forwarded-For entry (the original
-// client) when present, else the direct peer address. A soft ban: a determined
-// evader can change IP, and NAT means a ban can catch a household — good enough
-// to shut out the obvious repeat knocker.
+// Best-effort client IP for room-scoped knock bans (see clientIpFromHeaders). A
+// soft ban: a determined evader can change IP, and NAT means a ban can catch a
+// household — good enough to shut out the obvious repeat knocker.
 export function clientIp(socket: Socket): string {
-  const xff = socket.handshake.headers["x-forwarded-for"];
-  const first = Array.isArray(xff) ? xff[0] : xff?.split(",")[0];
-  return (first || socket.handshake.address || "").trim();
+  return clientIpFromHeaders(socket.handshake.headers, socket.handshake.address);
 }
 
 // Room-scoped operations shared across the connection handlers — mode switching,

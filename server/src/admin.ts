@@ -85,13 +85,19 @@ export function requestBaseUrl(
   return `${proto}://${host}`;
 }
 
+// The client address for bans and rate limits. Only a request arriving from
+// loopback (our reverse proxy) has its X-Forwarded-For trusted, and then only
+// the RIGHT-most entry — the one the proxy appended. Left-most entries are
+// whatever the client sent, so trusting them let a banned user walk back in.
 export function clientIpFromHeaders(
   headers: Record<string, string | string[] | undefined>,
   remote: string | undefined,
 ): string {
+  const direct = (remote ?? "").trim();
+  const viaProxy = direct === "127.0.0.1" || direct === "::1" || direct === "::ffff:127.0.0.1";
   const xff = headers["x-forwarded-for"];
-  const first = Array.isArray(xff) ? xff[0] : xff?.split(",")[0];
-  return (first || remote || "").trim();
+  const last = (Array.isArray(xff) ? xff.join(",") : xff)?.split(",").pop()?.trim();
+  return (viaProxy && last) || direct;
 }
 
 export class AdminSessions {
