@@ -62,11 +62,12 @@ export interface Room {
   // participant can reconnect/refresh without re-knocking. Sticky for the
   // room's lifetime.
   admittedTokens: Set<string>;
-  // Display names that have been admitted to this room (and not since denied),
-  // so someone who was let in earlier — then left — is auto-admitted if they
-  // come back under the same name instead of having to knock again. A denial
-  // removes the name (see join-decision). Soft, name-based, like bannedIps;
-  // sticky for the room's lifetime.
+  // (IP, display name) pairs admitted to this room (and not since denied), so
+  // someone who was let in earlier — then left — is auto-admitted if they come
+  // back under the same name from the same address instead of knocking again.
+  // Keyed by IP too: public rooms list participant names, so a name alone let
+  // anyone skip the knock by borrowing it. See admittedNameKey. A denial
+  // removes the pair (see join-decision); sticky for the room's lifetime.
   admittedNames: Set<string>;
   // Client IPs banned from this room because a participant denied their knock.
   // Checked on every join attempt to this room and refused outright (no knock).
@@ -152,6 +153,10 @@ function getNextWorker(): Worker {
   const worker = workers[workerIdx % workers.length];
   workerIdx++;
   return worker;
+}
+
+export function admittedNameKey(ip: string, displayName: string): string {
+  return `${ip}\n${displayName}`;
 }
 
 export async function getOrCreateRoom(roomName: string): Promise<Room> {
