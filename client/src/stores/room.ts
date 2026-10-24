@@ -9,6 +9,7 @@ import {
   type BackgroundChoice,
 } from "../lib/video/backgrounds";
 import { speak } from "../lib/tts";
+import type { VideoSource } from "../lib/video/video-media";
 
 // Keep the in-memory chat bounded; the server caps history too. Newest last.
 const CHAT_MESSAGES_MAX = 200;
@@ -228,7 +229,7 @@ function loadVideoBackground(customImage: string): BackgroundChoice {
 export interface VideoTile {
   producerId: string;
   peerId: string;
-  source: "camera" | "screen";
+  source: VideoSource;
 }
 
 // A pinned video (video rooms only): one peer's camera or screen blown up to
@@ -243,14 +244,14 @@ export interface VideoTile {
 // (removePeer) or we do (reset).
 export interface PinnedVideo {
   peerId: string;
-  source: "camera" | "screen";
+  source: VideoSource;
 }
 
 // Whether `pin` targets exactly this peer's camera/screen.
 export function isPinned(
   pin: PinnedVideo | null,
   peerId: string,
-  source: "camera" | "screen",
+  source: VideoSource,
 ): boolean {
   return pin != null && pin.peerId === peerId && pin.source === source;
 }
@@ -528,7 +529,7 @@ interface RoomState {
   clearVideoTiles: () => void;
   setPinnedVideo: (pin: PinnedVideo | null) => void;
   // Pin that camera/screen, or unpin it if it is already the pinned one.
-  togglePinnedVideo: (peerId: string, source: "camera" | "screen") => void;
+  togglePinnedVideo: (peerId: string, source: VideoSource) => void;
   bumpLocalVideo: () => void;
   setVideoGuidanceEnabled: (enabled: boolean) => void;
   setVideoBackground: (choice: BackgroundChoice) => void;

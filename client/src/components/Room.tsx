@@ -25,6 +25,7 @@ import { Footer, FooterLinks } from "./Footer";
 import { isVideoRoomParam } from "../lib/video/room-type";
 import { allowed, kickMode, loadRoomPolicy, voteIsAdminsOnly } from "../lib/moderation";
 import { m } from "../paraglide/messages.js";
+import type { VideoSource } from "../lib/video/video-media";
 
 // VIDEO rooms only: the video grid and the video toolbar are separate lazy
 // chunks, mounted solely when the join response says the room is a video room —
@@ -217,7 +218,7 @@ export function Room() {
   // signaled, so the person you pin never knows. Announced transiently (like
   // local mute / volume): it changes only YOUR view, so it isn't a room event
   // and doesn't belong in the chat timeline.
-  const togglePinVideo = useCallback((peerId: string, source: "camera" | "screen") => {
+  const togglePinVideo = useCallback((peerId: string, source: VideoSource) => {
     const s = useRoomStore.getState();
     const on = isPinned(s.pinnedVideo, peerId, source);
     s.togglePinnedVideo(peerId, source);
@@ -878,11 +879,12 @@ export function Room() {
         />
       )}
 
-      {/* Hidden local-file picker opened from the audio-source chooser. */}
+      {/* Hidden media picker. Video files retain picture in video rooms and
+          contribute only their sound in audio rooms. */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="audio/*"
+        accept="audio/*,video/*,.mkv"
         onChange={onFileChosen}
         className="hidden"
         aria-hidden="true"
