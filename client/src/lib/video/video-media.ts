@@ -32,7 +32,7 @@ import {
 import { captureFrame, describeFrame, DescribeError, type DescribeSubject } from "./describe-video";
 import type { CameraBackgroundFx } from "./background-fx";
 
-export type VideoSource = "camera" | "screen";
+export type VideoSource = "camera" | "screen" | "file-video";
 
 // An incoming video tile: one remote producer, owned by `peerId`.
 export interface VideoTile {
@@ -95,6 +95,10 @@ export class VideoMedia {
   // any, lives in OutgoingAudioGraph's share) + its producer.
   private screenTrack: MediaStreamTrack | null = null;
   private screenProducer: Producer | null = null;
+  // A video file is independent of display sharing. Its audio half still lives
+  // in OutgoingAudioGraph; this is only the captured picture track.
+  private fileTrack: MediaStreamTrack | null = null;
+  private fileProducer: Producer | null = null;
   // Incoming tiles keyed by producerId → the consumer and a MediaStream the
   // <video> elements attach to. The store holds the serialisable VideoTile list.
   private readonly incoming = new Map<
@@ -285,12 +289,43 @@ export class VideoMedia {
     return this.screenTrack != null && this.screenTrack.readyState === "live";
   }
 
+  // Produce the picture half of a streamed media file. A video room gets this
+  // extra VP8 producer; audio rooms deliberately never call it.
+  async attachFile(track: MediaStreamTrack): Promise<void> {
+    this.detachFile();
+    this.fileTrack = track;
+    await this.produceFile();
+  }
+
+  async produceFile(): Promise<void> {
+    const sendTransport = this.deps.getSendTransport();
+    const device = this.deps.getDevice();
+    const track = this.fileTrack;
+    if (!sendTransport || !device || !track || track.readyState !== "live") return;
+    if (this.fileProducer && !this.fileProducer.closed) return;
+    this.fileProducer = await sendTransport.produce({
+      track,
+      encodings: SCREEN_ENCODINGS,
+      codecOptions: { videoGoogleStartBitrate: 1000 },
+      appData: { source: "file-video", title: this.store.getState().fileStreamName ?? undefined },
+      stopTracks: false,
+    });
+  }
+
+  detachFile(): void {
+    if (this.fileProducer && !this.fileProducer.closed) this.fileProducer.close();
+    this.fileProducer = null;
+    this.fileTrack?.stop();
+    this.fileTrack = null;
+  }
+
   // --- SFU lifecycle hooks (called by useMediasoup) ---
 
   // Re-produce whatever is live after the SFU (re)builds: setupSfu calls this.
   async produceAll(): Promise<void> {
     await this.produceCamera();
     await this.produceScreen();
+    await this.produceFile();
   }
 
   // SFU teardown: close producers but KEEP the captures (stopTracks:false), so
@@ -299,6 +334,8 @@ export class VideoMedia {
     this.closeCameraProducer();
     if (this.screenProducer && !this.screenProducer.closed) this.screenProducer.close();
     this.screenProducer = null;
+    if (this.fileProducer && !this.fileProducer.closed) this.fileProducer.close();
+    this.fileProducer = null;
   }
 
   // --- Incoming tiles ---
@@ -334,7 +371,7 @@ export class VideoMedia {
     const s = this.store.getState();
     s.addVideoTile(tile);
     if (source === "camera") s.setPeerVideo(peerId, true);
-    else s.setPeerScreen(peerId, true);
+    else if (source === "screen") s.setPeerScreen(peerId, true);
   }
 
   async drainPending(): Promise<void> {
@@ -364,7 +401,7 @@ export class VideoMedia {
     );
     if (!stillHas) {
       if (source === "camera") s.setPeerVideo(peerId, false);
-      else s.setPeerScreen(peerId, false);
+      else if (source === "screen") s.setPeerScreen(peerId, false);
     }
   }
 
@@ -400,6 +437,8 @@ export class VideoMedia {
     this.closeCamera();
     this.screenTrack?.stop();
     this.screenTrack = null;
+    this.fileTrack?.stop();
+    this.fileTrack = null;
     this.cleanupAll();
     this.clearPending();
     const s = this.store.getState();
@@ -416,7 +455,9 @@ export class VideoMedia {
     if (this.describing) return;
     const s = this.store.getState();
     const isSelf = peerId === s.localPeerId;
-    const subject: DescribeSubject = isSelf ? "self" : source;
+    // File-video tiles are not offered by the Describe controls; retain the
+    // camera wording if one reaches this internal method programmatically.
+    const subject: DescribeSubject = isSelf ? "self" : source === "screen" ? "screen" : "camera";
     const stream = isSelf ? this.cameraStream : this.streamForPeer(peerId, source);
     if (!stream) {
       s.announce(describe_no_stream());
