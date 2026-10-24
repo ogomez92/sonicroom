@@ -268,6 +268,7 @@ public static class I18n
         ["removed_by_vote"] = ("{0} was removed from the room by vote", "{0} ha sido expulsado de la sala por votación", "{0} a été expulsé du salon par vote"),
         ["cannot_vote"] = ("Cannot vote to kick: {0}", "No se puede votar la expulsión: {0}", "Impossible de voter l'expulsion : {0}"),
         ["you_removed"] = ("You were removed from the room", "Has sido expulsado de la sala", "Vous avez été retiré du salon"),
+        ["connection_lost"] = ("Connection to the server was lost. You have left the call.", "Se ha perdido la conexión con el servidor. Has salido de la llamada.", "La connexion au serveur a été perdue. Vous avez quitté l'appel."),
         ["wants_join"] = ("{0} wants to join.", "{0} quiere entrar.", "{0} veut rejoindre."),
         ["someone_wants_join"] = ("Someone wants to join", "Alguien quiere entrar", "Quelqu'un veut rejoindre"),
         ["let_them_in"] = ("{0} is asking to join this room. Let them in?", "{0} pide entrar en esta sala. ¿Le dejas entrar?", "{0} demande à rejoindre ce salon. L'admettre ?"),

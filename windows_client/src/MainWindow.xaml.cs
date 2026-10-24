@@ -1012,6 +1012,14 @@ public sealed partial class MainWindow : Window
             _ => I18n.F("removed_by_vote", name),
         }));
         session.YouWereKicked += () => Enqueue(ShowKicked);
+        // The socket dropped mid-call: the server already removed us, so leave rather than sit
+        // in a dead call. Our own Leave/kick clears _inCall first, so those stay silent here.
+        session.ConnectionLost += _ => Enqueue(async () =>
+        {
+            if (_session != session || !_inCall) return;
+            await DoLeave();
+            Announce(I18n.T("connection_lost"));
+        });
 
         // Shared notes: created by us or by someone else; the label flips to "open".
         session.NotesAvailable += (url, by) => Enqueue(() =>

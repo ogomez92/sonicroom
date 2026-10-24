@@ -87,6 +87,9 @@ public sealed class RoomSession : IAsyncDisposable
     /// <summary>Someone was removed: display name, reason ("vote"|"caster"|"admin"), and who did it.</summary>
     public event Action<string, string, string?>? PeerKickedEvent;
     public event Action? YouWereKicked;
+    /// <summary>The signaling socket dropped (server gone, network lost). The server has already
+    /// removed this peer, so the call is over; carries the socket.io reason.</summary>
+    public event Action<string>? ConnectionLost;
     public event Action? RoomBecamePublic;
     public event Action? Joined;
     public event Action<string, bool>? PeerShareChanged;         // displayName, started
@@ -519,6 +522,7 @@ public sealed class RoomSession : IAsyncDisposable
     private void WireSignaling()
     {
         _sig.Log += m => Log?.Invoke($"[sig] {m}");
+        _sig.Disconnected += reason => ConnectionLost?.Invoke(reason);
         _sig.OnPeerJoined += p =>
         {
             lock (_map) _peerNames[p.PeerId] = p.DisplayName;

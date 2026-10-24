@@ -84,8 +84,10 @@ public sealed class SignalingClient : IAsyncDisposable
         {
             Transport = TransportProtocol.WebSocket, // server is websocket-only
             EIO = EngineIO.V4,                        // socket.io v4 server
-            Reconnection = true,
-            ReconnectionDelayMax = 5000,
+            // No auto-reconnect: the server tears the peer down on disconnect, so a silently
+            // reconnected socket would be a half-joined zombie. RoomSession surfaces the drop
+            // as ConnectionLost and the UI leaves the call instead.
+            Reconnection = false,
         });
 
         WireEvents();
