@@ -206,6 +206,8 @@ export function useMediasoup() {
   // Moderated rooms: the local half of a forced mute (set once `mute` exists —
   // see below) and whether we've announced "moderated room" this session.
   const forcedMuteRef = useRef<(by: string) => void>(() => {});
+  // leave(), reachable from join() (declared before it) to clean up a failed join.
+  const leaveRef = useRef<() => void>(() => {});
   const moderatedAnnouncedRef = useRef(false);
   // VIDEO rooms only: the camera/screen/incoming-tile controller. Null in every
   // audio room — it's created by dynamically importing lib/video/video-media the
@@ -1680,7 +1682,16 @@ export function useMediasoup() {
 
       // Resolve once the first connect → join → media setup has completed (or
       // reject if that initial join fails), so callers can flip to "joined".
-      await ready;
+      // A failed join must not leave the socket up: socket.io would reconnect
+      // and re-join (an approval could then admit us, live mic and all, behind
+      // the error screen), and a setup error after the server accepted us
+      // would keep us a participant. Skip if this session was already left.
+      try {
+        await ready;
+      } catch (err) {
+        if (socketRef.current === socket) leaveRef.current();
+        throw err;
+      }
 
       // Once joined, let the user know (and log to chat) that they're in
       // listen/chat-only mode, so it's not a silent surprise that they can't
@@ -2222,6 +2233,7 @@ export function useMediasoup() {
     moderatedAnnouncedRef.current = false;
     store.getState().reset();
   }, [teardownP2p, teardownSfu, graph, extraMics, store]);
+  leaveRef.current = leave;
 
   // Allow/deny a pending join request (participant side). Optimistically drop it
   // from our local list so the button doesn't linger; the server also broadcasts
