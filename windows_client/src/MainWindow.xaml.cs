@@ -819,7 +819,7 @@ public sealed partial class MainWindow : Window
         // Deliberately shadows this.Enqueue for every handler below: an event queued by a session
         // we have since left must not touch the next call's UI (phantom peer rows, stray chat
         // lines, announcements from a call that is over).
-        void Enqueue(DispatcherQueueHandler handler) =>
+        void Enqueue(Microsoft.UI.Dispatching.DispatcherQueueHandler handler) =>
             DispatcherQueue.TryEnqueue(() => { if (_session == session) handler(); });
         session.Log += s => { Diag.Log($"[session] {s}"); Enqueue(() => CallStatus.Text = s); };
         session.VoiceProcessingUnavailable += _ => Enqueue(() =>
