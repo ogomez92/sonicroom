@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using Concentus.Enums;
 using Concentus.Structs;
@@ -36,7 +40,7 @@ public sealed class RoomSession : IAsyncDisposable
     private MediasoupRpc? _rpc;
     private MediasoupSendTransport? _send;
     private MediasoupRecvTransport? _recv;
-    private MicCapture? _mic;
+    private IMicrophoneCapture? _mic;
     private OpusEncoder? _encoder;
     private WaveOutEvent? _output;
     private byte[] _encodeBuf = new byte[4000];
@@ -53,6 +57,7 @@ public sealed class RoomSession : IAsyncDisposable
 
     private readonly object _map = new();
     private readonly Dictionary<string, string> _peerNames = new();          // peerId → name
+    private readonly Dictionary<string, string> _admins = new();            // peerId → name (moderated rooms)
     private readonly Dictionary<string, (string PeerId, string Source, uint Ssrc, string? Title)> _producers = new();
     private readonly Dictionary<string, List<uint>> _peerSsrcs = new();       // peerId → ssrcs
     private readonly Dictionary<string, int> _kickVotes = new();              // targetId → votes
@@ -62,6 +67,8 @@ public sealed class RoomSession : IAsyncDisposable
     private bool _listenOnly;
     private bool _muted;
     private bool _deafened;
+    private bool _voiceEncoderStereo;
+    private readonly SemaphoreSlim _micSwitch = new(1, 1);
     private long _lastVoiceActiveMs; // Environment.TickCount64 of my last loud mic frame
 
     public event Action<string>? Log;
@@ -77,7 +84,8 @@ public sealed class RoomSession : IAsyncDisposable
     public event Action? JoinPending;
     public event Action<IReadOnlyList<JoinRequestItem>>? JoinRequestsChanged;
     public event Action<KickVote>? KickVoteChanged;              // full payload: target/voter names + tally
-    public event Action<string, string>? PeerKickedEvent;        // displayName, reason ("vote"|"caster")
+    /// <summary>Someone was removed: display name, reason ("vote"|"caster"|"admin"), and who did it.</summary>
+    public event Action<string, string, string?>? PeerKickedEvent;
     public event Action? YouWereKicked;
     public event Action? RoomBecamePublic;
     public event Action? Joined;
@@ -92,7 +100,26 @@ public sealed class RoomSession : IAsyncDisposable
     public event Action<string, string, bool, string>? StreamForceStopped;
     /// <summary>A file streamer swapped files in place — owner display name + the new title.</summary>
     public event Action<string, string?>? FileTitleChanged;
+    public event Action<string?>? FilePlaybackEnded;             // null = EOF, otherwise decoder error
     public event Action<bool, string?>? DuckingChangedEvent;     // enabled, by
+    /// <summary>Processed capture failed and the primary microphone was restored raw.</summary>
+    public event Action<int>? VoiceProcessingUnavailable;
+    /// <summary>A selected legacy Wave device could not be mapped and the default was used.</summary>
+    public event Action<string>? VoiceDeviceFallback;
+
+    // ---- shared notes (NoteLab) --------------------------------------------------------
+    /// <summary>The room's note became available (someone created it). Carries the URL.</summary>
+    public event Action<string, string?>? NotesAvailable;   // url, by (null = "available to you")
+
+    // ---- moderated rooms (admins) ------------------------------------------------------
+    /// <summary>An admin was named or revoked; the admin set may have changed.</summary>
+    public event Action<AdminsChanged>? AdminsChanged;
+    /// <summary>The last admin left: the room is no longer moderated and every control returns.</summary>
+    public event Action? ModerationEnded;
+    /// <summary>An admin force-muted my voice (soft — I may unmute myself again).</summary>
+    public event Action<string?>? ForceMutedBy;            // by
+    /// <summary>An admin force-muted everyone else.</summary>
+    public event Action<string?, int>? AllMutedBy;         // by, count
 
     public bool IsRecording { get; private set; }
     /// <summary>Capability token for the download endpoints. Kept after the recording stops
@@ -103,12 +130,42 @@ public sealed class RoomSession : IAsyncDisposable
     public bool DuckingEnabled { get; private set; } = true;
     public string? MyPeerId { get; private set; }
 
+    // ---- shared notes ------------------------------------------------------------------
+    /// <summary>Whether the server has NOTELAB_URL configured (gates the Notes control).</summary>
+    public bool NotesEnabled { get; private set; }
+    /// <summary>This room's note URL, once known. Null until someone creates it.</summary>
+    public string? NotesUrl { get; private set; }
+
+    // ---- moderated rooms ---------------------------------------------------------------
+    /// <summary>The room's fixed policy; null for an ordinary private/public room.</summary>
+    public ModerationPolicy? Moderation { get; private set; }
+    /// <summary>Whether I am an admin of this moderated room.</summary>
+    public bool IsAdmin { get; private set; }
+    /// <summary>Whether the room name is reserved (host-keyed).</summary>
+    public bool RoomIsReserved { get; private set; }
+
+    /// <summary>May I perform this action right now? Mirrors the server's <c>allowed</c>.</summary>
+    public bool Can(string action) => Session.Moderation.Allowed(Moderation, IsAdmin, action);
+
+    /// <summary>How I may remove people: "direct" | "vote" | "none" (unmoderated = "vote").</summary>
+    public string MyKickMode => Moderation is null ? "vote" : Session.Moderation.KickMode(Moderation, IsAdmin);
+
+    /// <summary>Whether a moderated room is in effect (every admin path is gated on this).</summary>
+    public bool IsModerated => Moderation is not null;
+
     /// <summary>Hi-fi voice opt-in: stereo ~128 kbps instead of the default mono ~64 kbps.
     /// Read at call start (the live producer's codec can't be renegotiated) — set before Connect.</summary>
     public bool HifiVoice { get; set; }
 
+    /// <summary>Desired voice-processing state before connect; active state thereafter.</summary>
+    public bool VoiceProcessingEnabled { get; set; }
+    public bool ActiveVoiceProcessing { get; private set; }
+
     /// <summary>Send-side mic boost (0–4×), applied before the soft limiter. Live-adjustable.</summary>
     public float MicGain { get; set; } = 1f;
+
+    /// <summary>Outgoing media gain (0–2×), applied before local monitoring and Opus encoding.</summary>
+    public float MediaVolume { get; set; } = 1f;
 
     /// <summary>Number of votable (human) participants including me — vote-to-kick needs ≥ 3.
     /// Casters are infrastructure, not people: they're excluded (matching the web's gate).</summary>
@@ -118,18 +175,27 @@ public sealed class RoomSession : IAsyncDisposable
     }
     public int KickVotesFor(string peerId) { lock (_map) return _kickVotes.TryGetValue(peerId, out var v) ? v : 0; }
 
+    /// <summary>Whether this peer is an admin (moderated rooms only).</summary>
+    public bool IsAdminPeer(string peerId) { lock (_map) return _admins.ContainsKey(peerId); }
+
+    /// <summary>The current admin names, for the room's admin list.</summary>
+    public IReadOnlyDictionary<string, string> AdminNames { get { lock (_map) return new Dictionary<string, string>(_admins); } }
+
     public bool Muted => _muted;
     public bool Deafened => _deafened;
     public IReadOnlyDictionary<string, string> PeerNames => _peerNames;
 
     private int _micDeviceNumber = -1; // -1 = wave mapper (the Windows default input)
+    private int _speakerDeviceNumber = -1;
 
     public async Task ConnectAsync(string serverUrl, string room, string displayName,
         bool listenOnly = false, bool makePublic = false, int micDeviceNumber = -1,
-        int speakerDeviceNumber = -1)
+        int speakerDeviceNumber = -1, string? hostKey = null, ModerationPolicy? moderation = null)
     {
         _listenOnly = listenOnly;
         _micDeviceNumber = micDeviceNumber;
+        _speakerDeviceNumber = speakerDeviceNumber;
+        _serverBase = serverUrl.TrimEnd('/');   // for the reserved-room poll
         _shareBus.Log += m => Log?.Invoke($"[share] {m}");
 
         _output = new WaveOutEvent { DesiredLatency = 120, DeviceNumber = speakerDeviceNumber };
@@ -146,9 +212,11 @@ public sealed class RoomSession : IAsyncDisposable
             DisplayName = displayName,
             JoinToken = Guid.NewGuid().ToString("N"),
             IsPublic = makePublic ? true : null,
+            HostKey = hostKey,
+            Moderation = moderation,
         };
 
-        var ack = await _sig.JoinAsync(req);
+        var ack = await JoinWithReservedWaitAsync(req, room, displayName);
         if (ack.IsPending)
         {
             JoinPending?.Invoke(); // UI shows "waiting to be let in…"
@@ -168,6 +236,21 @@ public sealed class RoomSession : IAsyncDisposable
         MyPeerId = _sig.Id;
         if (ack.KickVotes is not null)
             foreach (var kv in ack.KickVotes) _kickVotes[kv.TargetId] = kv.Votes;
+
+        // Shared notes + moderated-room state, all seeded from the join snapshot.
+        NotesEnabled = ack.NotesEnabled;
+        NotesUrl = ack.NotesUrl;
+        Moderation = ack.Moderation;
+        IsAdmin = ack.IsAdmin;
+        RoomIsReserved = ack.Reserved;
+        if (ack.Admins is not null)
+        {
+            lock (_map)
+            {
+                _admins.Clear();
+                foreach (var a in ack.Admins) _admins[a.PeerId] = a.DisplayName;
+            }
+        }
 
         _device.Load(ack.RtpCapabilities);
         IsRecording = ack.Recording is not null;
@@ -199,6 +282,76 @@ public sealed class RoomSession : IAsyncDisposable
         Log?.Invoke($"joined '{room}' as '{displayName}' (mode={ack.Mode}, peers={ack.Peers.Count})");
     }
 
+    /// <summary>
+    /// Join, handling a RESERVED room name. The server refuses an early arrival with
+    /// <c>ok:false, error:"reserved"</c> and creates NO room, so the name reads as not live until
+    /// the host (whoever holds the key) opens it. Rather than failing, we announce that we are
+    /// waiting and poll <c>GET /api/rooms/:name</c> until it exists, then re-join by ourselves —
+    /// landing in the moderated room's knock gate like anyone else.
+    ///
+    /// Matching the web client matters: a reserved room whose host has not arrived is not an error,
+    /// it is a closed door. Without this the user saw the raw string "reserved".
+    ///
+    /// Any OTHER join error is rethrown at once: only <c>reserved</c> is a wait, not a failure.
+    /// </summary>
+    private async Task<JoinAck> JoinWithReservedWaitAsync(JoinRequest req, string room, string displayName)
+    {
+        for (; ; )
+        {
+            try
+            {
+                return await _sig.JoinAsync(req);
+            }
+            catch (SignalingException ex) when (ex.Message == "reserved")
+            {
+                AwaitingHost?.Invoke(room, displayName);
+                if (!await WaitForReservedRoomAsync(room)) break;   // left while waiting
+            }
+        }
+        throw new OperationCanceledException("Left while waiting for the reserved room's host.");
+    }
+
+    /// <summary>Poll the room lookup until the reserved name exists. Returns false if the session
+    /// was torn down first, so leaving while waiting never hangs the caller.</summary>
+    private async Task<bool> WaitForReservedRoomAsync(string room)
+    {
+        var url = $"{_serverBase}/api/rooms/{Uri.EscapeDataString(room)}";
+        var cts = new CancellationTokenSource();
+        _reservedWaitCts = cts;
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        try
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(ReservedRoomWaitMs, cts.Token);
+                    using var res = await http.GetAsync(url, cts.Token);
+                    if (!res.IsSuccessStatusCode) continue;         // 404 = not live yet; keep waiting
+                    var body = await res.Content.ReadAsStringAsync(cts.Token);
+                    if (body.Contains("\"exists\":true", StringComparison.Ordinal)) return true;
+                }
+                catch (OperationCanceledException) { return false; }
+                catch (Exception ex)
+                {
+                    // A blip must not abandon the wait: the room is still coming.
+                    Log?.Invoke($"reserved-room poll failed: {ex.Message}");
+                }
+            }
+        }
+        finally { _reservedWaitCts = null; cts.Dispose(); }
+        return false;
+    }
+
+    private string _serverBase = "";
+    private CancellationTokenSource? _reservedWaitCts;
+    /// <summary>How often to re-check a reserved room while waiting for its host. Matches the web
+    /// client's 3 s cadence; <c>internal</c> so tests can shorten it.</summary>
+    internal static int ReservedRoomWaitMs { get; set; } = 3000;
+
+    /// <summary>Raised when a reserved room refuses us and we start waiting for its host.</summary>
+    public event Action<string, string>? AwaitingHost;   // room, displayName
+
     private async Task StartMicAsync()
     {
         _send = new MediasoupSendTransport(_rpc!);
@@ -210,12 +363,87 @@ public sealed class RoomSession : IAsyncDisposable
         // mics are mono — so hi-fi is opt-in, read once at call start.
         _voiceProducer = await _send.ProduceAsync("voice", null,
             stereo: HifiVoice, maxAverageBitrate: HifiVoice ? 128000 : 64000);
-        _encoder = HifiVoice
+        _voiceEncoderStereo = HifiVoice;
+        _encoder = _voiceEncoderStereo
             ? new OpusEncoder(48000, 2, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = 128000 }
             : new OpusEncoder(48000, 1, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = 64000 };
-        _mic = new MicCapture(_micDeviceNumber);
-        _mic.FrameReady += OnMicFrame;
-        _mic.Start();
+        await ReplacePrimaryCaptureAsync(VoiceProcessingEnabled);
+    }
+
+    /// <summary>
+    /// Switches only the primary capture source. The send transport, producer, encoder, and room
+    /// connection remain intact; extra microphones are deliberately unaffected.
+    /// </summary>
+    public async Task SwitchVoiceProcessingAsync(bool enabled)
+    {
+        VoiceProcessingEnabled = enabled;
+        if (_listenOnly || _voiceProducer is null) { ActiveVoiceProcessing = false; return; }
+        await ReplacePrimaryCaptureAsync(enabled);
+    }
+
+    private async Task ReplacePrimaryCaptureAsync(bool processed)
+    {
+        await _micSwitch.WaitAsync();
+        try
+        {
+            var previous = _mic;
+            _mic = null;
+            if (previous is not null)
+            {
+                previous.FrameReady -= OnMicFrame;
+                previous.Dispose();
+            }
+
+            IMicrophoneCapture next;
+            if (processed)
+            {
+                ProcessedMicCapture? processedCapture = null;
+                try
+                {
+                    var capture = VoiceDeviceMapper.MapCapture(_micDeviceNumber);
+                    var render = VoiceDeviceMapper.MapRender(_speakerDeviceNumber);
+                    if (capture.FellBack) VoiceDeviceFallback?.Invoke("microphone");
+                    if (render.FellBack) VoiceDeviceFallback?.Invoke("speaker");
+                    processedCapture = new ProcessedMicCapture(capture.EndpointIndex, render.EndpointIndex);
+                    processedCapture.CaptureFailed += OnProcessedCaptureFailed;
+                    next = processedCapture;
+                    next.FrameReady += OnMicFrame;
+                    next.Start();
+                    ActiveVoiceProcessing = true;
+                    _mic = next;
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    processedCapture?.Dispose();
+                    var hr = System.Runtime.InteropServices.Marshal.GetHRForException(ex);
+                    Diag.Log($"Voice processing unavailable (HRESULT 0x{hr:X8})", ex);
+                    VoiceProcessingEnabled = false;
+                    ActiveVoiceProcessing = false;
+                    VoiceProcessingUnavailable?.Invoke(hr);
+                }
+            }
+
+            next = new MicCapture(_micDeviceNumber);
+            next.FrameReady += OnMicFrame;
+            next.Start();
+            _mic = next;
+            ActiveVoiceProcessing = false;
+        }
+        finally { _micSwitch.Release(); }
+    }
+
+    private void OnProcessedCaptureFailed(Exception ex)
+        => _ = RecoverFromProcessedCaptureFailureAsync(ex);
+
+    private async Task RecoverFromProcessedCaptureFailureAsync(Exception ex)
+    {
+        var hr = System.Runtime.InteropServices.Marshal.GetHRForException(ex);
+        Diag.Log($"Voice processing capture failed (HRESULT 0x{hr:X8})", ex);
+        VoiceProcessingEnabled = false;
+        ActiveVoiceProcessing = false;
+        VoiceProcessingUnavailable?.Invoke(hr);
+        await ReplacePrimaryCaptureAsync(processed: false);
     }
 
     private void OnMicFrame(short[] frame)
@@ -225,7 +453,7 @@ public sealed class RoomSession : IAsyncDisposable
         {
             var gain = MicGain;
             short[] pcm;
-            if (HifiVoice)
+            if (_voiceEncoderStereo)
             {
                 // Stereo hi-fi: gain + soft limiter in place on the interleaved frame.
                 if (gain != 1f)
@@ -373,10 +601,39 @@ public sealed class RoomSession : IAsyncDisposable
         {
             CleanupPeer(v.PeerId);
             lock (_map) _kickVotes.Remove(v.PeerId);
-            PeerKickedEvent?.Invoke(v.DisplayName, v.Reason);
+            PeerKickedEvent?.Invoke(v.DisplayName, v.Reason, v.By);
             PeerLeft?.Invoke(v.PeerId);
         };
         _sig.OnYouWereKicked += () => YouWereKicked?.Invoke();
+
+        // Shared notes: someone created the room's note. Deduped against a URL we already have.
+        _sig.OnNotesUpdated += v =>
+        {
+            if (string.IsNullOrEmpty(v.Url) || v.Url == NotesUrl) return;
+            NotesUrl = v.Url;
+            NotesAvailable?.Invoke(v.Url, v.By);
+        };
+
+        // Moderated rooms: the admin set changed; refresh gates and the admin badges.
+        _sig.OnAdminsChanged += v =>
+        {
+            if (v.Change is { } c && c.PeerId == MyPeerId) IsAdmin = c.IsAdmin;
+            lock (_map) _admins.Clear();
+            foreach (var a in v.Admins) _admins[a.PeerId] = a.DisplayName;
+            AdminsChanged?.Invoke(v);
+        };
+        // The last admin left: the room is no longer moderated, so every control comes back.
+        _sig.OnModerationEnded += () =>
+        {
+            Moderation = null;
+            IsAdmin = false;
+            lock (_map) _admins.Clear();
+            ModerationEnded?.Invoke();
+        };
+        // A SOFT forced mute: the server already paused my producer; I just reflect it locally and
+        // may still unmute myself (producer-resume is not gated).
+        _sig.OnYouWereMuted += v => { _muted = true; ForceMutedBy?.Invoke(v.By); };
+        _sig.OnAllMuted += v => AllMutedBy?.Invoke(v.By, v.Count);
     }
 
     /// <summary>The server force-closed one of MY producers (anti-troll stop): tear down the
@@ -505,6 +762,61 @@ public sealed class RoomSession : IAsyncDisposable
 
     public Task SetDuckingAsync(bool enabled) => _sig.EmitAckRawAsync("set-ducking", new { enabled });
 
+    // ---- shared notes (NoteLab) --------------------------------------------------------------
+
+    /// <summary>
+    /// Get this room's shared collaborative note, creating it on first use, and return its URL —
+    /// or null when the server would not give us one. A refusal comes back as DATA rather than an
+    /// exception because it is an ordinary, reportable state, not a transport failure: "forbidden"
+    /// (this room gates notes), "notes_disabled" (the server has no NoteLab configured) and
+    /// "notes_failed" (NoteLab unreachable) each need a different message. The reason is left in
+    /// <see cref="NotesError"/> so the caller can say which one happened.
+    /// </summary>
+    public async Task<string?> OpenNotesAsync()
+    {
+        if (!NotesEnabled) { NotesError = "notes_disabled"; return null; }
+        // Already known (join ack, or a peer created it while we were in the room): no round-trip.
+        if (!string.IsNullOrEmpty(NotesUrl)) return NotesUrl;
+
+        try
+        {
+            var ack = await _sig.EmitAckAsync<OpenNotesAck>("open-notes", new { });
+            if (!ack.Ok || string.IsNullOrEmpty(ack.Url))
+            {
+                NotesError = ack.Error ?? "notes_failed";
+                return null;
+            }
+            NotesUrl = ack.Url;
+            NotesError = null;
+            return ack.Url;
+        }
+        catch (SignalingException ex)
+        {
+            // The server answers notes_disabled / notes_failed / forbidden on a healthy socket.
+            NotesError = ex.Message;
+            return null;
+        }
+    }
+
+    /// <summary>Why the last <see cref="OpenNotesAsync"/> returned null: "forbidden",
+    /// "notes_disabled" or "notes_failed"; null when it succeeded or has not been tried.</summary>
+    public string? NotesError { get; private set; }
+
+    // ---- moderated rooms (admin actions) -------------------------------------------------------
+
+    /// <summary>Name a co-admin (needs the room's "allow several admins") or revoke one.</summary>
+    public Task SetAdminAsync(string targetId, bool admin)
+        => _sig.EmitAckRawAsync("set-admin", new { targetId, admin });
+
+    /// <summary>Force-mute ONE participant for everyone (soft — they may unmute themselves).</summary>
+    public Task MutePeerAsync(string targetId) => _sig.EmitAckRawAsync("mute-peer", new { targetId });
+
+    /// <summary>Force-mute everyone else in the room.</summary>
+    public Task MuteAllAsync() => _sig.EmitAckRawAsync("mute-all", new { });
+
+    /// <summary>Remove a participant at once, no vote (a moderated room's direct admin kick).</summary>
+    public Task KickPeerAsync(string targetId) => _sig.EmitAckRawAsync("kick-peer", new { targetId });
+
     // ---- extra microphones (each is its own "mic" producer) --------------------------------
 
     public async Task<string?> StartExtraMicAsync(int deviceNumber, string name, bool stereo = false)
@@ -545,68 +857,313 @@ public sealed class RoomSession : IAsyncDisposable
     /// live producer (no stop/start, so listeners keep one continuous stream and just see the
     /// title change via <c>update-stream-title</c> → <c>producer-title-updated</c>, like the web).
     /// </summary>
-    public async Task StartFileAsync(string path, string title)
+    public async Task<string> StartFileAsync(string source, string title)
     {
-        if (_listenOnly || _send is null) { Log?.Invoke("file streaming requires an active mic session"); return; }
+        if (_listenOnly || _send is null)
+            throw new InvalidOperationException("Media streaming requires an active microphone session.");
+        if (!File.Exists(source) &&
+            (!Uri.TryCreate(source, UriKind.Absolute, out var uri) ||
+             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)))
+        {
+            throw new ArgumentException("The media source must be an existing local file or an HTTP/HTTPS URL.", nameof(source));
+        }
 
+        var requestedSource = source;
+        (source, title) = await ResolveWebMediaWithRetriesAsync(source, title, CancellationToken.None);
+        var ffmpeg = ResolveFfmpegPath();
         if (_fileProducer is { } live)
         {
             _filePumpCts?.Cancel();          // the old pump's finally sees the cancel and stays quiet
-            StartFilePump(live, path);
+            _mixer.ClearLocalMedia();
+            StartFilePump(live, source, requestedSource, title, ffmpeg);
             try { await _sig.EmitAckRawAsync("update-stream-title", new { producerId = live.ProducerId, title }); }
             catch (Exception ex) { Log?.Invoke($"update-stream-title: {ex.Message}"); }
-            Log?.Invoke($"file swapped to '{title}'");
-            return;
+            Log?.Invoke($"media swapped to '{title}'");
+            return title;
         }
 
         await _sig.EmitAckRawAsync("start-file-stream", new { });
         var prod = await _send.ProduceAsync("file", title, stereo: true, maxAverageBitrate: 128000);
         _fileProducer = prod;
-        StartFilePump(prod, path);
-        Log?.Invoke($"file streaming '{title}' started");
+        StartFilePump(prod, source, requestedSource, title, ffmpeg);
+        Log?.Invoke($"media streaming '{title}' started");
+        return title;
     }
 
-    private void StartFilePump(MediasoupSendTransport.Producer prod, string path)
+    private static async Task<(string Source, string Title)> ResolveWebMediaAsync(string source, string title)
     {
-        var cts = new System.Threading.CancellationTokenSource();
+        if (!Uri.TryCreate(source, UriKind.Absolute, out var uri) || !IsYouTubeHost(uri.Host))
+            return (source, title);
+
+        var startInfo = new ProcessStartInfo(ResolveYtDlpPath())
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in new[] { "--no-playlist", "--no-warnings", "--format", "bestaudio/best",
+                     "--print", "%(title)s", "--get-url", source })
+            startInfo.ArgumentList.Add(arg);
+
+        using var resolver = new Process { StartInfo = startInfo };
+        if (!resolver.Start()) throw new InvalidOperationException("yt-dlp could not be started.");
+        var outputTask = resolver.StandardOutput.ReadToEndAsync();
+        var errorTask = resolver.StandardError.ReadToEndAsync();
+        await resolver.WaitForExitAsync();
+        var output = await outputTask;
+        var error = (await errorTask).Trim();
+        if (resolver.ExitCode != 0)
+            throw new InvalidOperationException(string.IsNullOrEmpty(error)
+                ? $"yt-dlp exited with code {resolver.ExitCode}."
+                : error.Split('\n', StringSplitOptions.RemoveEmptyEntries).Last().Trim());
+
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 2 || !Uri.TryCreate(lines[^1].Trim(), UriKind.Absolute, out var mediaUri) ||
+            (mediaUri.Scheme != Uri.UriSchemeHttp && mediaUri.Scheme != Uri.UriSchemeHttps))
+            throw new InvalidOperationException("yt-dlp did not return a playable media URL.");
+        return (mediaUri.AbsoluteUri, lines[0].Trim());
+    }
+
+    private async Task<(string Source, string Title)> ResolveWebMediaWithRetriesAsync(
+        string source, string title, CancellationToken cancellationToken)
+    {
+        const int maxRetries = 2;
+        for (var retry = 0; ; retry++)
+        {
+            try { return await ResolveWebMediaAsync(source, title); }
+            catch (Exception ex) when (retry < maxRetries && IsForbidden(ex))
+            {
+                Log?.Invoke($"media resolver returned 403; retrying ({retry + 1}/{maxRetries})");
+                await Task.Delay(TimeSpan.FromSeconds(retry + 1), cancellationToken);
+            }
+        }
+    }
+
+    private static bool IsYouTubeHost(string host) =>
+        host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase) ||
+        host.Equals("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+        host.EndsWith(".youtube.com", StringComparison.OrdinalIgnoreCase);
+
+    private void StartFilePump(MediasoupSendTransport.Producer prod, string source,
+        string requestedSource, string title, string ffmpeg)
+    {
+        var cts = new CancellationTokenSource();
         _filePumpCts = cts;
         _ = Task.Run(async () =>
         {
+            string? failure = null;
             try
             {
-                NAudio.MediaFoundation.MediaFoundationApi.Startup();
-                using var reader = new AudioFileReader(path);
-                using var resampled = new MediaFoundationResampler(reader, new WaveFormat(48000, 16, 2)) { ResamplerQuality = 60 };
-                var enc = new OpusEncoder(48000, 2, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = 128000 };
-                var byteBuf = new byte[960 * 2 * 2]; // 20 ms stereo 16-bit
-                var pcm = new short[960 * 2];
-                var outBuf = new byte[4000];
-
-                while (!cts.IsCancellationRequested)
+                const int maxRetries = 2;
+                var currentSource = source;
+                for (var retry = 0; ; retry++)
                 {
-                    if (FillExact(resampled, byteBuf) == 0) break; // EOF
-                    for (var i = 0; i < pcm.Length; i++) pcm[i] = (short)(byteBuf[i * 2] | (byteBuf[i * 2 + 1] << 8));
-                    var len = enc.Encode(pcm, 0, 960, outBuf, 0, outBuf.Length);
-                    _send!.SendOpusFrame(prod, outBuf[..len]);
-                    await Task.Delay(20);
+                    try
+                    {
+                        await RunFileDecoderAsync(prod, currentSource, ffmpeg, cts.Token);
+                        break;
+                    }
+                    catch (Exception ex) when (!cts.IsCancellationRequested && retry < maxRetries && IsForbidden(ex))
+                    {
+                        Log?.Invoke($"media source returned 403; retrying ({retry + 1}/{maxRetries})");
+                        _mixer.ClearLocalMedia();
+                        await Task.Delay(TimeSpan.FromSeconds(retry + 1), cts.Token);
+                        (currentSource, _) = await ResolveWebMediaWithRetriesAsync(
+                            requestedSource, title, cts.Token);
+                    }
                 }
             }
-            catch (Exception ex) { Log?.Invoke($"file playback error: {ex.Message}"); }
-            finally { if (!cts.IsCancellationRequested) { _ = StopFileAsync(); } }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                failure = ex.Message;
+                Log?.Invoke($"media playback error: {ex.Message}");
+            }
+            finally
+            {
+                if (!cts.IsCancellationRequested)
+                {
+                    await StopFileAsync();
+                    FilePlaybackEnded?.Invoke(failure);
+                }
+                cts.Dispose();
+            }
         });
     }
 
-    private static int FillExact(IWaveProvider src, byte[] buf)
+    private static bool IsForbidden(Exception ex) =>
+        ex.Message.Contains("403", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase);
+
+    private async Task RunFileDecoderAsync(MediasoupSendTransport.Producer prod, string source,
+        string ffmpeg, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo(ffmpeg)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        var arguments = new List<string> { "-nostdin", "-hide_banner", "-loglevel", "error" };
+        if (Uri.TryCreate(source, UriKind.Absolute, out var mediaUri) &&
+            (mediaUri.Scheme == Uri.UriSchemeHttp || mediaUri.Scheme == Uri.UriSchemeHttps))
+        {
+            arguments.AddRange(new[] { "-rw_timeout", "15000000", "-reconnect", "1",
+                "-reconnect_streamed", "1", "-reconnect_delay_max", "5" });
+        }
+        arguments.AddRange(new[] { "-i", source, "-map", "0:a:0", "-vn", "-f", "s16le",
+            "-acodec", "pcm_s16le", "-ar", "48000", "-ac", "2", "pipe:1" });
+        foreach (var arg in arguments) startInfo.ArgumentList.Add(arg);
+
+        using var decoder = new Process { StartInfo = startInfo };
+        if (!decoder.Start()) throw new InvalidOperationException("FFmpeg could not be started.");
+        var errorTask = decoder.StandardError.ReadToEndAsync();
+        using var cancelDecoder = cancellationToken.Register(() =>
+        {
+            try { if (!decoder.HasExited) decoder.Kill(entireProcessTree: true); }
+            catch { }
+        });
+
+        // Decode-ahead: FFmpeg fills a bounded frame buffer as fast as it can decode (network
+        // reads included), while the paced loop below drains it in real time. The ~5 s of
+        // headroom absorbs network hiccups and slow decoder warm-up that used to underrun the
+        // real-time read; playback gates on ~2 s buffered (or EOF) at start and after a stall.
+        var buffer = new MediaFrameBuffer();
+        var decodeAhead = Task.Run(async () =>
+        {
+            try
+            {
+                var byteBuf = new byte[960 * 2 * 2]; // 20 ms stereo 16-bit
+                var stdout = decoder.StandardOutput.BaseStream;
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    if (buffer.IsFull) // cap reached: let playback drain (FFmpeg waits on its pipe)
+                    {
+                        await Task.Delay(20, cancellationToken);
+                        continue;
+                    }
+                    if (await FillExactAsync(stdout, byteBuf, cancellationToken) == 0) break;
+                    var frame = new short[960 * 2];
+                    for (var i = 0; i < frame.Length; i++)
+                        frame[i] = (short)(byteBuf[i * 2] | (byteBuf[i * 2 + 1] << 8));
+                    buffer.Enqueue(frame);
+                }
+            }
+            finally { buffer.Complete(); }
+        }, cancellationToken);
+
+        var enc = new OpusEncoder(48000, 2, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = 128000 };
+        var outBuf = new byte[4000];
+        var playbackClock = Stopwatch.StartNew();
+        long frameNumber = 0;
+        var wasPlaying = false;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var read = buffer.TryRead(out var pcm);
+            if (read == MediaFrameRead.Ended) break;
+            if (read == MediaFrameRead.Buffering)
+            {
+                // Send nothing rather than garbage; remote and local both go quiet together.
+                if (wasPlaying) Log?.Invoke("media rebuffering (decoder stalled)");
+                wasPlaying = false;
+                await Task.Delay(50, cancellationToken);
+                continue;
+            }
+            if (read == MediaFrameRead.Resumed)
+            {
+                // Re-anchor the pacing clock so the stall doesn't count as accumulated lag
+                // (the loop would otherwise blast frames to catch up).
+                playbackClock.Restart();
+                frameNumber = 0;
+            }
+            wasPlaying = true;
+
+            var mediaVolume = MediaVolume;
+            if (mediaVolume != 1f)
+                for (var i = 0; i < pcm!.Length; i++)
+                    pcm[i] = (short)Math.Clamp((int)(pcm[i] * mediaVolume), short.MinValue, short.MaxValue);
+            _mixer.QueueLocalMedia(pcm!);
+            var len = enc.Encode(pcm!, 0, 960, outBuf, 0, outBuf.Length);
+            _send!.SendOpusFrame(prod, outBuf[..len]);
+            frameNumber++;
+            var delayMs = frameNumber * 20.0 - playbackClock.Elapsed.TotalMilliseconds;
+            if (delayMs > 0) await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken);
+        }
+
+        if (cancellationToken.IsCancellationRequested) return;
+        await decodeAhead; // surface read errors (e.g. a 403 mid-stream) to the retry loop
+        await decoder.WaitForExitAsync(cancellationToken);
+        var error = (await errorTask).Trim();
+        if (decoder.ExitCode != 0)
+            throw new InvalidOperationException(string.IsNullOrEmpty(error)
+                ? $"FFmpeg exited with code {decoder.ExitCode}."
+                : error.Split('\n', StringSplitOptions.RemoveEmptyEntries).Last().Trim());
+    }
+
+    private static async Task<int> FillExactAsync(Stream source, byte[] buffer, CancellationToken cancellationToken)
     {
         var total = 0;
-        while (total < buf.Length)
+        while (total < buffer.Length)
         {
-            var n = src.Read(buf, total, buf.Length - total);
+            var n = await source.ReadAsync(buffer.AsMemory(total, buffer.Length - total), cancellationToken);
             if (n == 0) break;
             total += n;
         }
-        for (var i = total; i < buf.Length; i++) buf[i] = 0; // zero-pad the last partial frame
+        Array.Clear(buffer, total, buffer.Length - total); // zero-pad the last partial frame
         return total;
+    }
+
+    private static string ResolveFfmpegPath()
+    {
+        foreach (var candidate in new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
+        })
+            if (File.Exists(candidate)) return candidate;
+
+        var packages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WinGet", "Packages");
+        try
+        {
+            var installed = Directory.EnumerateDirectories(packages, "Gyan.FFmpeg.Essentials_*")
+                .SelectMany(directory => Directory.EnumerateFiles(directory, "ffmpeg.exe", SearchOption.AllDirectories))
+                .FirstOrDefault();
+            if (installed is not null) return installed;
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        return "ffmpeg.exe";
+    }
+
+    private static string ResolveYtDlpPath()
+    {
+        foreach (var candidate in new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "yt-dlp.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Microsoft", "WinGet", "Links", "yt-dlp.exe"),
+        })
+            if (File.Exists(candidate)) return candidate;
+
+        var packages = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WinGet", "Packages");
+        try
+        {
+            var installed = Directory.EnumerateDirectories(packages, "yt-dlp.yt-dlp_*")
+                .SelectMany(directory => Directory.EnumerateFiles(directory, "yt-dlp.exe", SearchOption.AllDirectories))
+                .FirstOrDefault();
+            if (installed is not null) return installed;
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        return "yt-dlp.exe";
     }
 
     public async Task StopFileAsync()
@@ -614,6 +1171,7 @@ public sealed class RoomSession : IAsyncDisposable
         _filePumpCts?.Cancel();
         _filePumpCts = null;
         _fileProducer = null;
+        _mixer.ClearLocalMedia();
         try { await _sig.EmitAckRawAsync("stop-file-stream", new { }); }
         catch (Exception ex) { Log?.Invoke($"stop-file-stream: {ex.Message}"); }
         Log?.Invoke("file streaming stopped");
@@ -670,6 +1228,11 @@ public sealed class RoomSession : IAsyncDisposable
         {
             var frame = new short[960 * 2];
             var outBuf = new byte[4000];
+            // Pace against a clock, not a bare Delay(20): Windows timer granularity stretches each
+            // Delay to ~31 ms, so the pump ran at ~32 fps and ShareBus overflowed its cap and
+            // dropped audio. Same scheme as the file pump.
+            var clock = Stopwatch.StartNew();
+            long frameNumber = 0;
             while (!cts.IsCancellationRequested)
             {
                 Array.Clear(frame, 0, frame.Length);
@@ -680,7 +1243,15 @@ public sealed class RoomSession : IAsyncDisposable
                     if (_shareProducer is { } p) _send.SendOpusFrame(p, outBuf[..len]);
                 }
                 catch { /* drop a frame */ }
-                await Task.Delay(20);
+                frameNumber++;
+                var delayMs = frameNumber * 20.0 - clock.Elapsed.TotalMilliseconds;
+                if (delayMs < -200)
+                {
+                    // Far behind (thread starved, machine asleep): resync instead of bursting.
+                    clock.Restart();
+                    frameNumber = 0;
+                }
+                else if (delayMs > 0) await Task.Delay(TimeSpan.FromMilliseconds(delayMs));
             }
         });
         Log?.Invoke("app share started");
@@ -733,6 +1304,7 @@ public sealed class RoomSession : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        try { _reservedWaitCts?.Cancel(); } catch { }      // leaving while waiting must not hang
         _mic?.Dispose();
         _sharePumpCts?.Cancel();
         _filePumpCts?.Cancel();
