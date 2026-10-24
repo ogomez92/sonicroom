@@ -301,6 +301,9 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
     if (!parsed.success) return;
 
     const { targetPeerId, type, payload } = parsed.data;
+    // Only relay to a peer in OUR room. io.to() also accepts room names, so an
+    // unchecked target let anyone offer to a private call and receive its mic.
+    if (targetPeerId === socket.id || !session.currentRoom.peers.has(targetPeerId)) return;
     io.to(targetPeerId).emit("p2p-signal", {
       fromPeerId: socket.id,
       type,
