@@ -17,7 +17,7 @@ import { useRoomStore } from "../stores/room";
 import { fakeServer, FakeServer, FakeSocket, type JoinResponse } from "../test/socket-mock";
 import { FakeRTCPeerConnection, FakeIceCandidate, resetWebRtcMock } from "../test/webrtc-mock";
 import { FakeDevice, FakeProducer, resetMediasoupMock } from "../test/mediasoup-mock";
-import { mediaController } from "../test/media-mock";
+import { mediaController, FakeMediaStream, FakeMediaStreamTrack } from "../test/media-mock";
 import {
   announce_mic_muted,
   announce_recording_started,
@@ -1147,6 +1147,34 @@ describe("reserved rooms", () => {
     await new Promise((r) => setTimeout(r, 5));
     expect(lookups).toBe(seen);
     hook.unmount();
+  });
+
+  it("leave() during the mic permission prompt abandons the join", async () => {
+    let grant!: () => void;
+    const track = new FakeMediaStreamTrack("audio", "Default Mic");
+    const real = mediaController.getUserMedia;
+    mediaController.getUserMedia = () =>
+      new Promise((res) => {
+        grant = () => res(new FakeMediaStream([track]));
+      });
+    try {
+      const hook = renderHook(() => useMediasoup());
+      let joinPromise: Promise<void>;
+      await act(async () => {
+        joinPromise = hook.result.current.join("room", "Alice");
+        joinPromise.catch(() => {});
+        await Promise.resolve();
+      });
+      await runAct(() => hook.result.current.leave());
+      await act(async () => grant());
+      await expect(joinPromise!).rejects.toThrow("left");
+      // The granted mic is released and no socket was ever opened.
+      expect(track.readyState).toBe("ended");
+      expect(fakeServer.lastSocket).toBeNull();
+      hook.unmount();
+    } finally {
+      mediaController.getUserMedia = real;
+    }
   });
 
   it("any other join error still rejects at once", async () => {

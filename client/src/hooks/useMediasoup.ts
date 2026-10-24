@@ -208,6 +208,9 @@ export function useMediasoup() {
   const forcedMuteRef = useRef<(by: string) => void>(() => {});
   // leave(), reachable from join() (declared before it) to clean up a failed join.
   const leaveRef = useRef<() => void>(() => {});
+  // Bumped by leave(), so a join still awaiting the mic permission prompt
+  // knows it was abandoned and must not carry on as a ghost session.
+  const sessionRef = useRef(0);
   const moderatedAnnouncedRef = useRef(false);
   // VIDEO rooms only: the camera/screen/incoming-tile controller. Null in every
   // audio room — it's created by dynamically importing lib/video/video-media the
@@ -841,6 +844,7 @@ export function useMediasoup() {
       // (no device, or permission denied) we fall back to the same mic-less
       // mode instead of throwing. Either way they can still listen and chat —
       // the outgoing track is outDest's, which is valid (silent) without a mic.
+      const session = sessionRef.current;
       let stream: MediaStream | null = null;
       if (!opts?.noMic) {
         try {
@@ -854,6 +858,11 @@ export function useMediasoup() {
         } catch (err) {
           console.warn("[mic] no microphone — joining in listen/chat-only mode:", err);
         }
+      }
+      // leave() ran while the prompt was up: release the mic and stop here.
+      if (sessionRef.current !== session) {
+        stream?.getTracks().forEach((t) => t.stop());
+        throw new Error("left");
       }
       if (stream) {
         noMicRef.current = false;
@@ -2193,6 +2202,7 @@ export function useMediasoup() {
   );
 
   const leave = useCallback(() => {
+    sessionRef.current++;
     // Stop waiting for a reserved room's host, if we were.
     hostWaitRef.current?.cancel();
     // Tear down any active file stream (stops the <audio>, revokes its URL).

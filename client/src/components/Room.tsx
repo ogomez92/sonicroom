@@ -166,6 +166,16 @@ export function Room() {
   // owns the element, this handler only asks.
   const [videoFullscreenSignal, setVideoFullscreenSignal] = useState(0);
   const joinedRef = useRef(false);
+  // Which join attempt is current. StrictMode (dev) unmounts + remounts us
+  // mid-join; the hook's unmount leave() abandons the first join, so the
+  // remount must join again and the abandoned attempt's result is ignored.
+  const joinAttemptRef = useRef(0);
+  useEffect(
+    () => () => {
+      joinedRef.current = false;
+    },
+    [],
+  );
   const knownPeersRef = useRef<Set<string>>(new Set());
   // How many messages had arrived last time chat was open, to badge unread.
   const seenCountRef = useRef(0);
@@ -315,6 +325,7 @@ export function Room() {
     sessionStorage.setItem("sonicroom:displayName", name);
 
     joinedRef.current = true;
+    const attempt = ++joinAttemptRef.current;
     setJoinState("joining");
 
     // Remember the p2p-off choice for this room/tab so a later reload or rejoin
@@ -331,8 +342,11 @@ export function Room() {
       moderation: loadRoomPolicy(roomName),
       hostKey,
     })
-      .then(() => setJoinState("joined"))
+      .then(() => {
+        if (attempt === joinAttemptRef.current) setJoinState("joined");
+      })
       .catch((err) => {
+        if (attempt !== joinAttemptRef.current) return;
         setJoinState("error");
         // A declined knock-to-join request (or a prior deny that banned this IP
         // from the room) gets a friendlier, localized message than the raw
