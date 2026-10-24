@@ -231,6 +231,8 @@ public sealed class RoomSession : IAsyncDisposable
             void Denied(JoinDenied _) => decision.TrySetResult(false);
             _sig.OnJoinApproved += Approved;
             _sig.OnJoinDenied += Denied;
+            // Nobody may ever answer the knock: leaving (Cancel in the lobby) must end the wait.
+            using var reg = _leaveCts.Token.Register(() => decision.TrySetCanceled());
             try { if (!await decision.Task) throw new InvalidOperationException(I18n.T("join_denied")); }
             finally { _sig.OnJoinApproved -= Approved; _sig.OnJoinDenied -= Denied; }
 
@@ -322,7 +324,8 @@ public sealed class RoomSession : IAsyncDisposable
     private async Task<bool> WaitForReservedRoomAsync(string room)
     {
         var url = $"{_serverBase}/api/rooms/{Uri.EscapeDataString(room)}";
-        var cts = new CancellationTokenSource();
+        // Linked to the leave token so a Cancel that lands before _reservedWaitCts is set still ends it.
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(_leaveCts.Token);
         _reservedWaitCts = cts;
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         try
@@ -351,6 +354,7 @@ public sealed class RoomSession : IAsyncDisposable
 
     private string _serverBase = "";
     private CancellationTokenSource? _reservedWaitCts;
+    private readonly CancellationTokenSource _leaveCts = new();   // cancelled by DisposeAsync
     /// <summary>How often to re-check a reserved room while waiting for its host. Matches the web
     /// client's 3 s cadence; <c>internal</c> so tests can shorten it.</summary>
     internal static int ReservedRoomWaitMs { get; set; } = 3000;
@@ -1313,6 +1317,7 @@ public sealed class RoomSession : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         try { _reservedWaitCts?.Cancel(); } catch { }      // leaving while waiting must not hang
+        try { _leaveCts.Cancel(); } catch { }              // ...nor while knocking
         _mic?.Dispose();
         _sharePumpCts?.Cancel();
         _filePumpCts?.Cancel();
