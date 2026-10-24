@@ -9,11 +9,70 @@ import type { Device } from "mediasoup-client";
 import type { Transport, Producer } from "mediasoup-client/types";
 import { useRoomStore } from "../../stores/room";
 import { resumeContext, GAIN_RAMP } from "./shared-context";
+import { HOWL, HowlDetector } from "./howl-detector";
+import {
+  announce_feedback_ducked,
+  announce_feedback_restored,
+} from "../../paraglide/messages.js";
+
+// Howl (acoustic feedback) guard polling. setInterval is throttled to ~1 s in a
+// hidden tab; the detector's persistence is wall-time based, so it still
+// catches a howl on the 2nd poll there (checked on a real recording).
+// ponytail: timer-driven; move detection into an AudioWorklet if 1 s is too slow.
+const HOWL_POLL_MS = 50;
+const HOWL_NOTCH_Q = 40;
+const HOWL_DUCK_GAIN = 0.0316; // -30 dB
+const HOWL_WARN_EVERY_MS = 30_000;
 
 // Soft limiter sitting after the outgoing mic gain so boosting a quiet/cheap mic
 // doesn't clip: transparent until peaks approach 0 dBFS, then ~20:1 with a fast
 // attack. Adds ~5 ms of look-ahead latency, negligible for voice.
 const MIC_LIMITER = { threshold: -3, knee: 0, ratio: 20, attack: 0.003, release: 0.25 };
+
+// "Loudness boost": the level lift of voice processing's auto gain, without its
+// echo cancel / noise suppression. A fixed +18 dB pre-gain into a 6:1
+// compressor from -30 dB (Web Audio adds ~+15 dB makeup) acts as a leveller:
+// speech from -50 to -22 dBFS RMS comes out at about -21 to -15 dBFS, peaks
+// near -5, so the limiter after it rarely has to act. Measured offline in
+// Chrome. Room noise is lifted too (no noise suppression, by design).
+// ponytail: fixed curve; raise preGain or lower threshold for louder.
+export const LOUDNESS_BOOST = {
+  preGain: 8,
+  threshold: -30,
+  knee: 10,
+  ratio: 6,
+  attack: 0.005,
+  release: 0.25,
+};
+
+// The boost sub-graph: input (pre-gain) → compressor. Connect `output` onward.
+export function createLoudnessBoost(ctx: BaseAudioContext): {
+  input: GainNode;
+  output: DynamicsCompressorNode;
+} {
+  const input = ctx.createGain();
+  input.gain.value = LOUDNESS_BOOST.preGain;
+  const output = ctx.createDynamicsCompressor();
+  output.threshold.value = LOUDNESS_BOOST.threshold;
+  output.knee.value = LOUDNESS_BOOST.knee;
+  output.ratio.value = LOUDNESS_BOOST.ratio;
+  output.attack.value = LOUDNESS_BOOST.attack;
+  output.release.value = LOUDNESS_BOOST.release;
+  input.connect(output);
+  return { input, output };
+}
+
+// Route `gain` into the limiter either directly or through the boost (whose
+// output is always connected to the limiter), so boost-off costs nothing.
+export function routeLoudnessBoost(
+  gain: AudioNode,
+  boost: AudioNode,
+  limiter: AudioNode,
+  enabled: boolean,
+) {
+  gain.disconnect();
+  gain.connect(enabled ? boost : limiter);
+}
 
 // The share + file producers negotiate full stereo hi-fi (the router's 256 kbps
 // ceiling allows it), independent of voice. Identical for both.
@@ -36,7 +95,13 @@ export class OutgoingAudioGraph {
   // Voice chain (built once by ensure()).
   private micSource: MediaStreamAudioSourceNode | null = null;
   private micGain: GainNode | null = null;
+  // Entry of the howl guard (mic → guard → micGain); see buildHowlGuard.
+  private howlInput: GainNode | null = null;
+  // The guard's poll loop. Cleared in disconnectAll: the graph is rebuilt for
+  // each room, so a live timer would keep polling a dead analyser after leaving.
+  private howlTimer: ReturnType<typeof setInterval> | null = null;
   private limiter: DynamicsCompressorNode | null = null;
+  private loudnessBoost: GainNode | null = null;
   private outDest: MediaStreamAudioDestinationNode | null = null;
   private micStream: MediaStream | null = null;
   // Share sub-graph (displaySource → shareDest) + its capture + producer.
@@ -75,6 +140,7 @@ export class OutgoingAudioGraph {
     resumeContext(this.ctx);
     const micGain = this.ctx.createGain();
     micGain.gain.value = this.store.getState().micGain;
+    this.howlInput = this.buildHowlGuard(micGain);
     const limiter = this.ctx.createDynamicsCompressor();
     limiter.threshold.value = MIC_LIMITER.threshold;
     limiter.knee.value = MIC_LIMITER.knee;
@@ -82,11 +148,20 @@ export class OutgoingAudioGraph {
     limiter.attack.value = MIC_LIMITER.attack;
     limiter.release.value = MIC_LIMITER.release;
     const outDest = this.ctx.createMediaStreamDestination();
-    micGain.connect(limiter);
+    const loudnessBoost = createLoudnessBoost(this.ctx);
+    loudnessBoost.output.connect(limiter);
+    routeLoudnessBoost(micGain, loudnessBoost.input, limiter, this.store.getState().loudnessBoostEnabled);
     limiter.connect(outDest);
     this.micGain = micGain;
     this.limiter = limiter;
+    this.loudnessBoost = loudnessBoost.input;
     this.outDest = outDest;
+  }
+
+  // Live loudness-boost toggle (the store already holds the persisted choice).
+  setLoudnessBoost(enabled: boolean) {
+    if (this.micGain && this.loudnessBoost && this.limiter)
+      routeLoudnessBoost(this.micGain, this.loudnessBoost, this.limiter, enabled);
   }
 
   // The processed outgoing track / stream everyone receives. ensure() must have run.
@@ -104,7 +179,7 @@ export class OutgoingAudioGraph {
     if (this.micStream === stream && this.micSource) return;
     this.micSource?.disconnect();
     this.micSource = this.ctx.createMediaStreamSource(stream);
-    this.micSource.connect(this.micGain!);
+    this.micSource.connect(this.howlInput!);
     this.micStream = stream;
   }
 
@@ -256,12 +331,77 @@ export class OutgoingAudioGraph {
     this.fileProducer = null;
   }
 
+  // Feedback-howl guard in front of the mic gain: an analyser watches the raw
+  // mic, HowlDetector spots a narrow, rising tone (a speaker reaching the mic —
+  // often another device the browser's echo canceller can't see), and deep
+  // peaking notches cut just that frequency; if a tone gets too loud for the
+  // notches the whole mic ducks and the user is told why (politely, throttled).
+  private buildHowlGuard(next: AudioNode): GainNode {
+    const ctx = this.ctx;
+    const input = ctx.createGain();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 4096;
+    analyser.smoothingTimeConstant = 0;
+    const notches = Array.from({ length: HOWL.maxNotches }, () => {
+      const f = ctx.createBiquadFilter();
+      f.type = "peaking";
+      f.Q.value = HOWL_NOTCH_Q;
+      f.gain.value = 0;
+      return f;
+    });
+    const duck = ctx.createGain();
+    input.connect(analyser);
+    let tail: AudioNode = input;
+    for (const node of [...notches, duck]) {
+      tail.connect(node);
+      tail = node;
+    }
+    duck.connect(next);
+
+    const detector = new HowlDetector(ctx.sampleRate, analyser.fftSize);
+    const spectrum = new Float32Array(analyser.frequencyBinCount);
+    const active = notches.map(() => false);
+    let ducked = false;
+    let lastWarnAt = -Infinity;
+    this.howlTimer = setInterval(() => {
+      if (ctx.state !== "running") return;
+      analyser.getFloatFrequencyData(spectrum);
+      const state = detector.update(spectrum, performance.now());
+      const now = ctx.currentTime;
+      state.notches.forEach((n, i) => {
+        const f = notches[i];
+        if (!n) {
+          if (active[i]) f.gain.setTargetAtTime(0, now, 0.3);
+          active[i] = false;
+          return;
+        }
+        // A fresh notch jumps to its tone before cutting; a live one glides.
+        if (active[i]) f.frequency.setTargetAtTime(n.hz, now, 0.02);
+        else f.frequency.setValueAtTime(n.hz, now);
+        f.gain.setTargetAtTime(n.gainDb, now, 0.02);
+        active[i] = true;
+      });
+      if (state.duck === ducked) return;
+      ducked = state.duck;
+      duck.gain.setTargetAtTime(ducked ? HOWL_DUCK_GAIN : 1, now, ducked ? 0.03 : 0.5);
+      const wallNow = performance.now();
+      if (ducked && wallNow - lastWarnAt > HOWL_WARN_EVERY_MS) {
+        lastWarnAt = wallNow;
+        this.store.getState().announce(announce_feedback_ducked());
+      } else if (!ducked && wallNow - lastWarnAt < HOWL_WARN_EVERY_MS) {
+        this.store.getState().announce(announce_feedback_restored());
+      }
+    }, HOWL_POLL_MS);
+    return input;
+  }
+
   // Disconnect every node and reset to unbuilt (leave). The shared context itself
   // is reused for the next room, so a later ensure() rebuilds the chain. Also stops
   // any live display capture (the share's getDisplayMedia tracks).
   disconnectAll() {
     if (this.outDest) {
       this.micSource?.disconnect();
+      this.howlInput?.disconnect();
       this.micGain?.disconnect();
       this.limiter?.disconnect();
       this.displaySource?.disconnect();
@@ -271,7 +411,10 @@ export class OutgoingAudioGraph {
       this.fileMonitorGain?.disconnect();
     }
     this.displayStream?.getTracks().forEach((t) => t.stop());
+    if (this.howlTimer) clearInterval(this.howlTimer);
+    this.howlTimer = null;
     this.micSource = null;
+    this.howlInput = null;
     this.micGain = null;
     this.limiter = null;
     this.outDest = null;

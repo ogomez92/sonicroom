@@ -22,6 +22,9 @@ public sealed class PeerMixer : IWaveProvider
 
     // ~400 ms jitter cap: if a source runs far ahead (we fell behind), drop to bound latency.
     private const int MaxQueueShorts = 48000 * 2 * 400 / 1000;
+    // WaveOut requests more than one 20 ms frame at a time. Prime enough outgoing media to fill
+    // its callback instead of playing one frame followed by silence until the next callback.
+    private const int LocalMediaPrebufferShorts = 960 * 2 * 6; // 120 ms
 
     // Peak (absolute S16) above which a decoded frame counts as "active" for the
     // speaking indicator, and how long a source stays "speaking" after its last
@@ -41,6 +44,10 @@ public sealed class PeerMixer : IWaveProvider
 
     private readonly Dictionary<uint, Source> _sources = new();
     private readonly object _lock = new();
+    // Outgoing file/URL media is not echoed back by the SFU, so keep a bounded local-monitor
+    // queue and mix it into the selected speaker output alongside incoming peers.
+    private readonly Queue<short> _localMedia = new();
+    private bool _localMediaPrimed;
 
     // Currently-playing cue buffers (interleaved S16 stereo @48k) with a play cursor each.
     // A List because cues can overlap (a chat chime during the knock loop).
@@ -95,6 +102,18 @@ public sealed class PeerMixer : IWaveProvider
             for (var f = 0; f < frames; f++)
             {
                 int left = 0, right = 0;
+                if (_localMediaPrimed && _localMedia.Count >= 2)
+                {
+                    var mediaLeft = _localMedia.Dequeue();
+                    var mediaRight = _localMedia.Dequeue();
+                    if (!Deafened)
+                    {
+                        var mediaGain = DuckActive && DuckingEnabled ? DuckFactor : 1f;
+                        left += (int)(mediaLeft * mediaGain);
+                        right += (int)(mediaRight * mediaGain);
+                    }
+                }
+                else if (_localMediaPrimed) _localMediaPrimed = false;
                 if (!Deafened)
                 {
                     foreach (var s in _sources.Values)
@@ -139,6 +158,30 @@ public sealed class PeerMixer : IWaveProvider
     {
         if (pcm.Length < 2) return;
         lock (_lock) _cues.Add((pcm, 0));
+    }
+
+    /// <summary>Queue outgoing media PCM for local monitoring (interleaved S16 stereo @48 kHz).</summary>
+    public void QueueLocalMedia(short[] pcm)
+    {
+        lock (_lock)
+        {
+            if (_localMedia.Count + pcm.Length > MaxQueueShorts)
+            {
+                _localMedia.Clear();
+                _localMediaPrimed = false;
+            }
+            for (var i = 0; i < pcm.Length; i++) _localMedia.Enqueue(pcm[i]);
+            if (_localMedia.Count >= LocalMediaPrebufferShorts) _localMediaPrimed = true;
+        }
+    }
+
+    public void ClearLocalMedia()
+    {
+        lock (_lock)
+        {
+            _localMedia.Clear();
+            _localMediaPrimed = false;
+        }
     }
 
     /// <summary>Whether this source decoded a loud frame within the speaking hold window.</summary>
