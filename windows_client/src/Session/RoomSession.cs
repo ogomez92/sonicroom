@@ -827,13 +827,26 @@ public sealed class RoomSession : IAsyncDisposable
         var prod = await _send.ProduceAsync("mic", name, stereo, maxAverageBitrate: stereo ? 96000 : 48000);
         var enc = new OpusEncoder(48000, 2, OpusApplication.OPUS_APPLICATION_AUDIO) { Bitrate = stereo ? 96000 : 48000 };
         var buf = new byte[4000];
-        var cap = new MicCapture(deviceNumber);
-        cap.FrameReady += frame =>
+        MicCapture? cap = null;
+        try
         {
-            try { var len = enc.Encode(frame, 0, 960, buf, 0, buf.Length); _send.SendOpusFrame(prod, buf[..len]); }
-            catch { /* drop a frame */ }
-        };
-        cap.Start();
+            cap = new MicCapture(deviceNumber);
+            cap.FrameReady += frame =>
+            {
+                try { var len = enc.Encode(frame, 0, 960, buf, 0, buf.Length); _send.SendOpusFrame(prod, buf[..len]); }
+                catch { /* drop a frame */ }
+            };
+            cap.Start();
+        }
+        catch
+        {
+            // The producer already exists server-side: close it, or it stays as a silent stream
+            // (and an SFU pin) that nothing in this client can stop.
+            cap?.Dispose();
+            try { await _sig.EmitAckRawAsync("stop-extra-mic", new { producerId = prod.ProducerId }); }
+            catch (Exception ex) { Log?.Invoke($"stop-extra-mic: {ex.Message}"); }
+            throw;
+        }
         _extraMics[prod.ProducerId] = (cap, prod);
         Log?.Invoke($"extra mic '{name}' started");
         return prod.ProducerId;
