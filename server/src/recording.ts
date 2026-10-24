@@ -5,6 +5,7 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { RtpParameters, RtpCapabilities } from "mediasoup/types";
+import { lowerPriority } from "./audio-sources.js";
 import {
   PortAllocator,
   buildSdp,
@@ -465,7 +466,7 @@ export class RecordingManager {
     const args = isVideoTrack(track)
       ? buildTrackMp4Args({ video: track.video, audio: track.audio, totalMs: track.totalMs })
       : buildPadArgs(track);
-    return this.deps.spawn(this.deps.ffmpegPath, args);
+    return lowerPriority(this.deps.spawn(this.deps.ffmpegPath, args));
   }
 
   // Spawn a one-shot ffmpeg that mixes the current capture files into a single
@@ -484,7 +485,7 @@ export class RecordingManager {
     if (inputs.length === 0) return null;
     const args = buildMixArgs(inputs);
     this.deps.log(`mixing ${inputs.length} stream(s) for room "${roomName}"`);
-    return this.deps.spawn(this.deps.ffmpegPath, args);
+    return lowerPriority(this.deps.spawn(this.deps.ffmpegPath, args));
   }
 
   // VIDEO ROOMS ONLY. Whole-call MP4: every camera/screen laid out in a grid
@@ -504,7 +505,7 @@ export class RecordingManager {
       `mixing ${video.length} picture(s) + ${audio.length} sound track(s) to MP4 for room "${roomName}"`,
     );
     return {
-      proc: this.deps.spawn(this.deps.ffmpegPath, args),
+      proc: lowerPriority(this.deps.spawn(this.deps.ffmpegPath, args)),
       container: "mp4",
       contentType: "video/mp4",
     };
