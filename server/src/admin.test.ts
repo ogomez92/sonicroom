@@ -53,11 +53,14 @@ describe("admin helpers", () => {
     assert.equal(requestBaseUrl({}, false), "http://localhost");
   });
 
-  it("clientIpFromHeaders takes the left-most forwarded address", () => {
+  it("clientIpFromHeaders trusts only the proxy-appended (right-most) address", () => {
+    // nginx appends the real client after anything the client sent itself.
     assert.equal(
-      clientIpFromHeaders({ "x-forwarded-for": "1.2.3.4, 10.0.0.1" }, "127.0.0.1"),
+      clientIpFromHeaders({ "x-forwarded-for": "6.6.6.6, 1.2.3.4" }, "127.0.0.1"),
       "1.2.3.4",
     );
+    // Not from our proxy: the header is the client's own claim — ignore it.
+    assert.equal(clientIpFromHeaders({ "x-forwarded-for": "6.6.6.6" }, "5.5.5.5"), "5.5.5.5");
     assert.equal(clientIpFromHeaders({}, "127.0.0.1"), "127.0.0.1");
   });
 
