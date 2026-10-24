@@ -21,6 +21,7 @@ import {
   MicOff as MicOffIcon,
 } from "lucide-react";
 import { isPinned, type PeerState, type PinnedVideo } from "../stores/room";
+import { useActiveById } from "../lib/active-by-id";
 import { m } from "../paraglide/messages.js";
 
 interface ParticipantListProps {
@@ -130,7 +131,8 @@ export function ParticipantList({
   const isSelf = (peerId: string) => peerId === selfPeer.peerId;
 
   // Level-1 active option (roving via aria-activedescendant). -1 = none yet.
-  const [activeIdx, setActiveIdx] = useState(-1);
+  // Tracked by peerId, so a peer leaving above it can't shift it to someone else.
+  const [activeIdx, setActiveIdx] = useActiveById(rows, (r) => r.peerId);
   // Level-2 drill-down target, keyed by peerId (NOT index) so a peer/stream
   // leaving while their options are open is detectable.
   const [openPeerId, setOpenPeerId] = useState<string | null>(null);
@@ -142,11 +144,6 @@ export function ParticipantList({
 
   const openPeer = openPeerId != null ? (rows.find((r) => r.peerId === openPeerId) ?? null) : null;
   const openPeerMissing = openPeerId != null && openPeer == null;
-
-  // Keep the active option in bounds as the room grows/shrinks.
-  useEffect(() => {
-    setActiveIdx((i) => (i < 0 ? -1 : Math.min(i, rows.length - 1)));
-  }, [rows.length]);
 
   // Keep the active row visible while navigating.
   useEffect(() => {
