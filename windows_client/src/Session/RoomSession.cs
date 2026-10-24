@@ -1236,6 +1236,11 @@ public sealed class RoomSession : IAsyncDisposable
         {
             var frame = new short[960 * 2];
             var outBuf = new byte[4000];
+            // Pace against a clock, not a bare Delay(20): Windows timer granularity stretches each
+            // Delay to ~31 ms, so the pump ran at ~32 fps and ShareBus overflowed its cap and
+            // dropped audio. Same scheme as the file pump.
+            var clock = Stopwatch.StartNew();
+            long frameNumber = 0;
             while (!cts.IsCancellationRequested)
             {
                 Array.Clear(frame, 0, frame.Length);
@@ -1246,7 +1251,15 @@ public sealed class RoomSession : IAsyncDisposable
                     if (_shareProducer is { } p) _send.SendOpusFrame(p, outBuf[..len]);
                 }
                 catch { /* drop a frame */ }
-                await Task.Delay(20);
+                frameNumber++;
+                var delayMs = frameNumber * 20.0 - clock.Elapsed.TotalMilliseconds;
+                if (delayMs < -200)
+                {
+                    // Far behind (thread starved, machine asleep): resync instead of bursting.
+                    clock.Restart();
+                    frameNumber = 0;
+                }
+                else if (delayMs > 0) await Task.Delay(TimeSpan.FromMilliseconds(delayMs));
             }
         });
         Log?.Invoke("app share started");
