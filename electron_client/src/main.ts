@@ -159,6 +159,37 @@ function installCorsRelaxation(): void {
   });
 }
 
+// Our own pages: the bundled client/settings over app://, plus the dev-server origin when
+// SONICROOM_CLIENT_URL points the client window elsewhere. Only these get media
+// permissions or may be navigated to; webSecurity is off, so nothing else should run here.
+const TRUSTED_ORIGINS = [APP_ORIGIN];
+if (process.env.SONICROOM_CLIENT_URL) {
+  try {
+    TRUSTED_ORIGINS.push(new URL(process.env.SONICROOM_CLIENT_URL).origin);
+  } catch {
+    /* malformed override: loadURL will fail loudly on its own */
+  }
+}
+
+// Prefix match, not URL.origin: Node reports origin "null" for the custom app:// scheme.
+function isTrustedUrl(url: string): boolean {
+  return TRUSTED_ORIGINS.some((origin) => url === origin || url.startsWith(`${origin}/`));
+}
+
+// Keep every window on our own pages. A plain link (or a hostile page script) that would
+// navigate the app away opens in the system browser instead, if it is http(s) at all.
+function installNavigationGuard(): void {
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-navigate", (event) => {
+      if (isTrustedUrl(event.url)) return;
+      event.preventDefault();
+      if (event.url.startsWith("http://") || event.url.startsWith("https://")) {
+        void shell.openExternal(event.url);
+      }
+    });
+  });
+}
+
 function installPermissionHandlers(): void {
   const allowed = new Set([
     "media",
@@ -168,10 +199,13 @@ function installPermissionHandlers(): void {
     "clipboard-read",
     "clipboard-sanitized-write",
   ]);
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(allowed.has(permission));
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    callback(allowed.has(permission) && isTrustedUrl(details.requestingUrl || wc.getURL()));
   });
-  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
+  session.defaultSession.setPermissionCheckHandler(
+    (_wc, permission, requestingOrigin) =>
+      allowed.has(permission) && isTrustedUrl(requestingOrigin),
+  );
 }
 
 // Screen / system-audio share. The client calls getDisplayMedia({video:true,
@@ -404,6 +438,7 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     protocol.handle(APP_SCHEME, handleAppRequest);
     installCorsRelaxation();
+    installNavigationGuard();
     installPermissionHandlers();
     installDisplayMediaHandler();
     registerIpc();
