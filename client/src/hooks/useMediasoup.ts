@@ -1813,7 +1813,9 @@ export function useMediasoup() {
 
   const startAudioShare = useCallback(async () => {
     if (store.getState().isSharingAudio) return;
-    if (!localStreamRef.current) return;
+    // Not in a session. (Deliberately NOT a mic check: the share has its own
+    // destination and never touches the mic, so mic-less users can share too.)
+    if (!socketRef.current) return;
 
     // Chrome requires `video: true` to expose system/tab audio. We discard
     // the video track immediately — we only want the audio.
