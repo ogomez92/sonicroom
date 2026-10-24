@@ -23,7 +23,9 @@ public sealed class MediasoupSendTransport
     private TransportParams? _tp;
     private IReadOnlyList<RemoteSdp.AudioSection>? _sections;
     private readonly List<MediaStreamTrack> _tracks = new();
-    private int _nextIndex; // 0-based producer index == AudioStreamList slot (primary is 0)
+    // 0-based producer index == AudioStreamList slot (primary is 0). Stopped producers give
+    // their slot back (ReleaseSlot), so starting a 17th share/file/mic in one call still works.
+    private readonly ProducerSlotPool _slots = new(ProducerSlots);
 
     public event Action<string>? Log;
     public event Action<RTCPeerConnectionState>? ConnectionStateChanged;
@@ -39,8 +41,20 @@ public sealed class MediasoupSendTransport
         public required AudioStream? Stream { get; init; }
         public required string Source { get; init; }
         public required int PayloadType { get; init; }
+        internal int Slot { get; init; }
+        internal int Released;
         internal int FramesSent;
         internal int SecurityWaitLogged;
+    }
+
+    /// <summary>
+    /// Give a stopped producer's slot back for reuse. Call only once the server has closed the
+    /// producer (stop ack or a server-side force-stop): the slot keeps its SSRC, and mediasoup
+    /// refuses a second live producer with the same one. Idempotent per producer.
+    /// </summary>
+    public void ReleaseSlot(Producer producer)
+    {
+        if (Interlocked.Exchange(ref producer.Released, 1) == 0) _slots.Release(producer.Slot);
     }
 
     private async Task EnsureTransportAsync()
@@ -108,9 +122,7 @@ public sealed class MediasoupSendTransport
         await EnsureProducerSlotsAsync();
         var pc = _pc!;
 
-        var index = _nextIndex++;
-        if (index >= ProducerSlots)
-            throw new InvalidOperationException($"This call already uses all {ProducerSlots} outgoing audio slots.");
+        var index = _slots.Take();
         var track = _tracks[index];
         var ssrc = track.Ssrc;
         var section = _sections![index];
@@ -146,13 +158,15 @@ public sealed class MediasoupSendTransport
             rtcp = new { cname, reducedSize = true },
         };
 
-        var producerId = await _rpc.ProduceAsync("audio", rtpParameters, source, title);
+        string producerId;
+        try { producerId = await _rpc.ProduceAsync("audio", rtpParameters, source, title); }
+        catch { _slots.Release(index); throw; }
         Log?.Invoke($"produced {source} producerId={producerId} ssrc={ssrc} pt={section.PayloadType}");
 
         return new Producer
         {
             ProducerId = producerId, Ssrc = ssrc, Stream = stream, Source = source,
-            PayloadType = section.PayloadType,
+            PayloadType = section.PayloadType, Slot = index,
         };
     }
 
