@@ -311,6 +311,8 @@
   "announce_video_on": "{name} turned their video on",
   "announce_video_off": "{name} turned their video off",
   "announce_video_failed": "Couldn't start your camera",
+  "announce_media_connection_lost": "Audio connection lost. Reconnecting…",
+  "announce_media_connection_restored": "Audio connection restored",
   "announce_room_now_video": "This room is now a video call",
   "announce_screen_started": "{name} started sharing their screen",
   "announce_screen_stopped": "{name} stopped sharing their screen",

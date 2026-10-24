@@ -62,6 +62,25 @@ export function registerSfuHandlers(ctx: ConnectionContext) {
     }
   });
 
+  // ICE failed on one of the peer's transports (network change): hand back
+  // fresh ICE parameters for the client's transport.restartIce().
+  socket.on("restart-ice", async (data: unknown, cb: (res: unknown) => void) => {
+    try {
+      const { direction } = z.object({ direction: z.enum(["send", "recv"]) }).parse(data);
+      const transport =
+        direction === "send"
+          ? session.currentPeer?.sendTransport
+          : session.currentPeer?.recvTransport;
+      if (!transport) {
+        cb({ ok: false, error: "Transport not found" });
+        return;
+      }
+      cb({ ok: true, iceParameters: await transport.restartIce() });
+    } catch (err) {
+      cb({ ok: false, error: err instanceof Error ? err.message : "ICE restart failed" });
+    }
+  });
+
   socket.on("produce", async (data: unknown, cb: (res: unknown) => void) => {
     try {
       if (!session.currentRoom || !session.currentPeer?.sendTransport) {

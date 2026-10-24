@@ -19,6 +19,8 @@ export class FakeRTCPeerConnection {
   readonly config: RTCConfiguration;
   onicecandidate: ((e: { candidate: FakeIceCandidate | null }) => void) | null = null;
   ontrack: ((e: { track: FakeMediaStreamTrack }) => void) | null = null;
+  onconnectionstatechange: (() => void) | null = null;
+  connectionState: RTCPeerConnectionState = "new";
   localDescription: RTCSessionDescriptionInit | null = null;
   remoteDescription: RTCSessionDescriptionInit | null = null;
   closed = false;
@@ -59,6 +61,10 @@ export class FakeRTCPeerConnection {
   // Test helpers.
   fireIceCandidate(candidate: FakeIceCandidate | null) {
     this.onicecandidate?.({ candidate });
+  }
+  setConnectionState(state: RTCPeerConnectionState) {
+    this.connectionState = state;
+    this.onconnectionstatechange?.();
   }
   fireTrack(track = new FakeMediaStreamTrack("audio", "remote")) {
     this.ontrack?.({ track });

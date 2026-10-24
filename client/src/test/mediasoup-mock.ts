@@ -62,6 +62,12 @@ export class FakeTransport {
     this.handlers[event] = cb;
   }
 
+  readonly iceRestarts: unknown[] = [];
+  restartIce({ iceParameters }: { iceParameters: unknown }) {
+    this.iceRestarts.push(iceParameters);
+    return Promise.resolve();
+  }
+
   async produce(options: ProduceOptions): Promise<FakeProducer> {
     // Drive the "produce" handler the hook registered, like mediasoup-client
     // does — it emits to the server and calls back with the server producer id.
