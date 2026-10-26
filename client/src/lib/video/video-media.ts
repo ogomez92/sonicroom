@@ -178,13 +178,20 @@ export class VideoMedia {
     const track = this.cameraStream?.getVideoTracks()[0];
     if (!sendTransport || !device || !track || track.readyState !== "live") return;
     if (this.cameraProducer && !this.cameraProducer.closed) return;
-    this.cameraProducer = await sendTransport.produce({
+    const producer = await sendTransport.produce({
       track,
       encodings: CAMERA_ENCODINGS,
       codecOptions: { videoGoogleStartBitrate: 800 },
       appData: { source: "camera" },
       stopTracks: false,
     });
+    // Camera turned off while producing: a stored dead producer would block
+    // every later start (stop-video already closed it server-side).
+    if (this.cameraStream?.getVideoTracks()[0] !== track) {
+      producer.close();
+      return;
+    }
+    this.cameraProducer = producer;
   }
 
   // Turn our camera off: close the producer, stop the capture, tell the room
@@ -260,7 +267,7 @@ export class VideoMedia {
     const track = this.screenTrack;
     if (!sendTransport || !device || !track || track.readyState !== "live") return;
     if (this.screenProducer && !this.screenProducer.closed) return;
-    this.screenProducer = await sendTransport.produce({
+    const producer = await sendTransport.produce({
       track,
       encodings: SCREEN_ENCODINGS,
       codecOptions: { videoGoogleStartBitrate: 1000 },
@@ -269,6 +276,13 @@ export class VideoMedia {
       appData: { source: "screen", title: track.label || undefined },
       stopTracks: false,
     });
+    // Share stopped while producing — same as produceCamera (stop-share
+    // closes the server side).
+    if (this.screenTrack !== track) {
+      producer.close();
+      return;
+    }
+    this.screenProducer = producer;
   }
 
   // Stop the screen video (the share ended — by us, by the browser's "Stop

@@ -147,7 +147,8 @@ export class OutgoingAudioGraph {
     // The display-capture track names what's being shared ("System Audio" / "Tab
     // audio"), so other peers' tiles read "Tyler's shared audio: …".
     const shareLabel = this.displayStream?.getAudioTracks()[0]?.label || undefined;
-    this.shareProducer = await sendTransport.produce({
+    const dest = this.shareDest;
+    const producer = await sendTransport.produce({
       track,
       codecOptions: { ...SHARE_FILE_CODEC_OPTIONS },
       codec: device.recvRtpCapabilities.codecs?.find(
@@ -156,6 +157,14 @@ export class OutgoingAudioGraph {
       appData: { source: "share", title: shareLabel },
       stopTracks: false,
     });
+    // The share was stopped while producing: storing this producer would make
+    // every later start see a "live" one and return early. stop-share already
+    // closed it server-side (it's peer-wide and ordered after our produce).
+    if (this.shareDest !== dest) {
+      producer.close();
+      return;
+    }
+    this.shareProducer = producer;
   }
 
   // Disconnect the share nodes + stop the display capture.
@@ -214,7 +223,8 @@ export class OutgoingAudioGraph {
     if (this.fileProducer && !this.fileProducer.closed) return;
     const track = this.fileDest.stream.getAudioTracks()[0];
     if (!track) return;
-    this.fileProducer = await sendTransport.produce({
+    const dest = this.fileDest;
+    const producer = await sendTransport.produce({
       track,
       codecOptions: { ...SHARE_FILE_CODEC_OPTIONS },
       codec: device.recvRtpCapabilities.codecs?.find(
@@ -225,6 +235,12 @@ export class OutgoingAudioGraph {
       appData: { source: "file", title: this.store.getState().fileStreamName ?? undefined },
       stopTracks: false,
     });
+    // Stopped while producing — same as produceShare.
+    if (this.fileDest !== dest) {
+      producer.close();
+      return;
+    }
+    this.fileProducer = producer;
   }
 
   // The live file producer's id (for re-titling on a file swap), if any.
