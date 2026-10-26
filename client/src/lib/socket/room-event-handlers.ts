@@ -20,8 +20,6 @@ import {
   announce_streaming_stopped,
   announce_streaming_failed,
   announce_streaming_failed_reason,
-  announce_peer_muted,
-  announce_peer_unmuted,
   announce_chat_hint,
   announce_notes_opened,
   announce_peer_muted_by,
@@ -130,14 +128,16 @@ export function registerNotesHandlers(socket: Socket) {
 
 type SurfaceToggle = (key: string, value: boolean, emit: () => void) => void;
 
-// A remote peer toggled their mic: reflect it, play a soft cue, and speak it on the
-// polite ARIA region. NOT logged to chat (announce, not announceEvent) — too noisy.
+// A remote peer toggled their mic: reflect it and play a soft cue — the CUE ONLY,
+// deliberately no spoken announcement. A room full of people riding their mute key
+// buried everything else under "X muted their microphone"; the tone says the same
+// thing in a fraction of the time and the card/participant list carry the state.
 // Coalesced per peer (surfaceToggle) so a peer mashing their mic only blips once.
 export function registerMuteHandlers(socket: Socket, surfaceToggle: SurfaceToggle) {
   socket.on("peer-muted", ({ peerId, by }: { peerId: string; by?: string }) => {
     store.getState().setPeerMuted(peerId, true);
-    // Muted FOR everyone by someone else (moderated room): that's a room event,
-    // logged to chat by name — not the transient "X muted" of a self-mute.
+    // Muted FOR everyone by someone else (moderated room): that IS still spoken and
+    // logged to chat by name — a moderation action, not the transient self-mute.
     if (by) {
       const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
       store.getState().announceEvent(announce_peer_muted_by({ name, by }));
@@ -145,8 +145,6 @@ export function registerMuteHandlers(socket: Socket, surfaceToggle: SurfaceToggl
       return;
     }
     surfaceToggle(`peer:${peerId}`, true, () => {
-      const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-      store.getState().announce(announce_peer_muted({ name }));
       playCue(getSharedAudioContext(), "peer-mute");
     });
   });
@@ -154,8 +152,6 @@ export function registerMuteHandlers(socket: Socket, surfaceToggle: SurfaceToggl
   socket.on("peer-unmuted", ({ peerId }: { peerId: string }) => {
     store.getState().setPeerMuted(peerId, false);
     surfaceToggle(`peer:${peerId}`, false, () => {
-      const name = store.getState().peers.get(peerId)?.displayName ?? announce_a_participant();
-      store.getState().announce(announce_peer_unmuted({ name }));
       playCue(getSharedAudioContext(), "peer-unmute");
     });
   });

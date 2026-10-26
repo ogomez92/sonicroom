@@ -56,6 +56,11 @@ export interface RtpConsumer {
   id: string;
   kind: string;
   rtpParameters: RtpParameters;
+  // Whether the upstream producer is paused (its peer is muted), and the event
+  // mediasoup fires when it resumes. Recording waits on these so a capture is
+  // never started for a producer that is sending nothing (see startRecorder).
+  producerPaused?: boolean;
+  on?(event: "producerresume", listener: () => void): unknown;
   resume(): Promise<void>;
   close(): void;
   // Video only. mediasoup asks the producer for a fresh keyframe so the capture
@@ -127,12 +132,34 @@ interface ProducerRecorder {
   source?: string;
   kind: TrackKind;
   port: number;
+  sdpPath: string;
+  // File stem shared by every segment of this producer's capture.
+  base: string;
+  // Which capture segment `filePath` is. A producer normally has one; a new one
+  // starts only if a capture that had already recorded media dies on its own
+  // (see onCaptureExit), so what it got is kept rather than overwritten.
+  segment: number;
   filePath: string;
+  // When the current segment's capture began receiving (≈ its first packet),
+  // which is what aligns it in the mix. Until then, when the recorder was set up.
   startedAt: number;
   transport: RtpPlainTransport;
   consumer: RtpConsumer;
-  ffmpeg: SpawnedProcess;
+  // The running capture. Absent while waiting for a paused (muted) producer to
+  // resume, or after a capture ended and before its relaunch.
+  ffmpeg?: SpawnedProcess;
+  // When `ffmpeg` was spawned, to tell a timeout from a capture that failed.
+  launchedAt: number;
+  launching: boolean;
+  // Set by stopRecorder: any capture exit from here on is expected.
+  stopped: boolean;
 }
+
+// ffmpeg's SDP/RTP input gives up after 10 s without a packet (20 s if none
+// ever arrived). A capture that exits sooner didn't time out, it failed (bad
+// SDP, spawn error, …), and relaunching it straight away would only spin. It
+// waits for the producer's next resume instead.
+export const MIN_RESTART_LIFETIME_MS = 5000;
 
 // One captured track in the per-track download: the on-disk file and the name
 // it should carry inside the zip.
@@ -579,12 +606,22 @@ export class RecordingManager {
 
   // --- internals ----------------------------------------------------------
 
+  private isLive(rec: RoomRecording): boolean {
+    return !rec.closing && rec.status === "recording";
+  }
+
+  // Set up one producer's capture: a PlainTransport + paused consumer feeding a
+  // local UDP port, and the SDP ffmpeg reads it through. The ffmpeg itself is
+  // started by launchCapture, and only once the producer is actually sending:
+  // ffmpeg exits for good after ~20 s without a single packet, so a capture
+  // started for a MUTED producer used to die before they ever unmuted, and
+  // that person was silently missing from the whole recording.
   private async startRecorder(rec: RoomRecording, info: ProducerInfo): Promise<void> {
     const { deps } = this;
     let port: number | undefined;
     let transport: RtpPlainTransport | undefined;
     let consumer: RtpConsumer | undefined;
-    let ffmpeg: SpawnedProcess | undefined;
+    let recorder: ProducerRecorder;
     try {
       port = deps.ports.allocate();
       transport = await rec.router.createPlainTransport({
@@ -604,53 +641,33 @@ export class RecordingManager {
       const sdp = buildSdp(sdpParamsFromRtp(consumer.rtpParameters, port));
       const base = `${safeId(info.peerId)}__${safeId(info.producerId)}`;
       const sdpPath = path.join(rec.dir, `${base}.sdp`);
-      const filePath = path.join(rec.dir, `${base}.${captureExtension(kind)}`);
       await deps.writeFile(sdpPath, sdp);
+      // Bail out if the recording was torn down while we were setting up.
+      if (!this.isLive(rec)) throw new Error("recording closed during recorder startup");
 
-      ffmpeg = deps.spawn(deps.ffmpegPath, buildCaptureArgs(sdpPath, filePath, kind));
-      const captured = ffmpeg;
-      ffmpeg.stderr?.on("data", (d: Buffer) => {
-        const line = d.toString().trim();
-        if (line) deps.log(`ffmpeg[${base}]: ${line}`);
-      });
-      ffmpeg.on("exit", (code, signal) => {
-        deps.log(`ffmpeg[${base}] exited code=${code} signal=${signal}`);
-      });
-
-      // Let ffmpeg bind its UDP port before media starts flowing.
-      if (deps.resumeDelayMs > 0) await deps.sleep(deps.resumeDelayMs);
-      // Bail out if the recording was torn down while we were waiting.
-      if (rec.closing || rec.status !== "recording") {
-        throw new Error("recording closed during recorder startup");
-      }
-      await consumer.resume();
-      // Picture only: ask for a keyframe now so the capture opens on a
-      // decodable frame instead of black until the encoder's next one.
-      if (kind === "video") {
-        await consumer.requestKeyFrame?.().catch(() => {});
-      }
-
-      rec.recorders.set(info.producerId, {
+      recorder = {
         producerId: info.producerId,
         peerId: info.peerId,
         label: info.label,
         source: info.source,
         kind,
         port,
-        filePath,
+        sdpPath,
+        base,
+        segment: 1,
+        filePath: path.join(rec.dir, `${base}.${captureExtension(kind)}`),
         startedAt: deps.now(),
         transport,
         consumer,
-        ffmpeg: captured,
-      });
-      deps.log(`recording producer ${info.producerId} (peer ${info.peerId}) on port ${port}`);
+        launchedAt: 0,
+        launching: false,
+        stopped: false,
+      };
+      // Registered before any capture runs, so removeProducer/finalize/discard
+      // own its teardown from here on, whether or not it ever launches.
+      rec.recorders.set(info.producerId, recorder);
     } catch (err) {
       // Clean up any partially-created resources for this producer.
-      try {
-        ffmpeg?.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
       try {
         consumer?.close();
       } catch {
@@ -663,13 +680,119 @@ export class RecordingManager {
       }
       if (port !== undefined) deps.ports.release(port);
       deps.log(`failed to record producer ${info.producerId}: ${String(err)}`);
+      return;
+    }
+
+    // A no-op while a capture is running (an ordinary unmute mid-recording).
+    recorder.consumer.on?.("producerresume", () => void this.launchCapture(rec, recorder));
+    if (recorder.consumer.producerPaused) {
+      deps.log(
+        `producer ${info.producerId} (peer ${info.peerId}) is paused (muted); ` +
+          `its capture starts when it resumes`,
+      );
+      return;
+    }
+    await this.launchCapture(rec, recorder);
+  }
+
+  // Start (or restart) the ffmpeg for a recorder and let media flow into it.
+  // Never throws; it's also called from mediasoup's producerresume event.
+  private async launchCapture(rec: RoomRecording, r: ProducerRecorder): Promise<void> {
+    const { deps } = this;
+    if (r.ffmpeg || r.launching || r.stopped || !this.isLive(rec)) return;
+    r.launching = true;
+    let ffmpeg: SpawnedProcess | undefined;
+    try {
+      ffmpeg = deps.spawn(deps.ffmpegPath, buildCaptureArgs(r.sdpPath, r.filePath, r.kind));
+      const proc = ffmpeg;
+      r.ffmpeg = proc;
+      r.launchedAt = deps.now();
+      const tag = r.segment > 1 ? `${r.base}#${r.segment}` : r.base;
+      proc.stderr?.on("data", (d: Buffer) => {
+        const line = d.toString().trim();
+        if (line) deps.log(`ffmpeg[${tag}]: ${line}`);
+      });
+      proc.on("exit", (code, signal) => {
+        deps.log(`ffmpeg[${tag}] exited code=${code} signal=${signal}`);
+        this.onCaptureExit(rec, r, proc);
+      });
+
+      // Let ffmpeg bind its UDP port before media starts flowing.
+      if (deps.resumeDelayMs > 0) await deps.sleep(deps.resumeDelayMs);
+      // Stopped (stopRecorder already killed it) or already dead while we waited.
+      if (r.stopped || r.ffmpeg !== proc || !this.isLive(rec)) return;
+      await r.consumer.resume();
+      // Picture only: ask for a keyframe now so the capture opens on a
+      // decodable frame instead of black until the encoder's next one.
+      if (r.kind === "video") {
+        await r.consumer.requestKeyFrame?.().catch(() => {});
+      }
+      r.startedAt = deps.now();
+      deps.log(
+        r.segment > 1
+          ? `recording producer ${r.producerId} (peer ${r.peerId}) again, segment ${r.segment}`
+          : `recording producer ${r.producerId} (peer ${r.peerId}) on port ${r.port}`,
+      );
+    } catch (err) {
+      // Leave the recorder registered (removeProducer/finalize still tear it
+      // down); the producer's next resume gets another try.
+      if (ffmpeg && r.ffmpeg === ffmpeg) {
+        r.ffmpeg = undefined;
+        try {
+          ffmpeg.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+      }
+      deps.log(`failed to start capture of producer ${r.producerId}: ${String(err)}`);
+    } finally {
+      r.launching = false;
     }
   }
 
+  // A capture exited. Expected after stopRecorder. Otherwise it ended on its
+  // own while the producer is still in the recording, almost always ffmpeg's
+  // no-packet timeout (the producer paused before sending anything, or went
+  // quiet without the RTCP that normally keeps a paused capture alive). Keep
+  // whatever it captured, and capture again as soon as the producer is live.
+  private onCaptureExit(rec: RoomRecording, r: ProducerRecorder, proc: SpawnedProcess): void {
+    const { deps } = this;
+    if (r.ffmpeg !== proc) return;
+    r.ffmpeg = undefined;
+    if (r.stopped || !this.isLive(rec)) return;
+
+    if (deps.fileSize(r.filePath) >= MIN_CAPTURE_BYTES) {
+      // It recorded something: file that away as a finished segment and write
+      // the rest to a fresh file, so the relaunch can't overwrite it.
+      rec.closedRecorders.push({ ...r, stopped: true });
+      r.segment += 1;
+      r.filePath = path.join(rec.dir, `${r.base}-${r.segment}.${captureExtension(r.kind)}`);
+    }
+
+    if (r.consumer.producerPaused) {
+      deps.log(
+        `capture of producer ${r.producerId} (peer ${r.peerId}) ended while it is paused; ` +
+          `restarting when it resumes`,
+      );
+      return;
+    }
+    const livedMs = deps.now() - r.launchedAt;
+    if (livedMs < MIN_RESTART_LIFETIME_MS) {
+      deps.log(
+        `capture of producer ${r.producerId} (peer ${r.peerId}) failed after ${livedMs} ms; ` +
+          `retrying when it next resumes`,
+      );
+      return;
+    }
+    deps.log(`capture of producer ${r.producerId} (peer ${r.peerId}) ended early; restarting`);
+    void this.launchCapture(rec, r);
+  }
+
   private stopRecorder(recorder: ProducerRecorder): void {
+    recorder.stopped = true;
     try {
       // SIGINT lets ffmpeg finalize the Ogg trailer cleanly.
-      recorder.ffmpeg.kill("SIGINT");
+      recorder.ffmpeg?.kill("SIGINT");
     } catch {
       /* ignore */
     }

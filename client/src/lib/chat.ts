@@ -25,6 +25,10 @@ export interface ChatMessage {
   // announcement, snapshotted in the locale active when it happened) and
   // ignores sender.
   kind?: "join" | "leave" | "system";
+  // "system" only: the locale `text` was written in. The UI language can change
+  // mid-call, so an older event line may no longer match <html lang>; renderers
+  // tag it with this so a screen reader reads it with the right voice.
+  lang?: string;
 }
 
 // One RelativeTimeFormat per active locale (constructing them isn't free, and

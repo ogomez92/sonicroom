@@ -76,12 +76,26 @@ class FakeConsumer implements RtpConsumer {
   closed = false;
   resumed = false;
   keyFramesRequested = 0;
+  private readonly resumeListeners: Array<() => void> = [];
   constructor(
     public id: string,
     isVideo = false,
+    // the producer was already paused (its peer muted) when this was consumed
+    public producerPaused = false,
   ) {
     this.kind = isVideo ? "video" : "audio";
     this.rtpParameters = isVideo ? VIDEO_RTP : RTP;
+  }
+  on(_event: "producerresume", listener: () => void) {
+    this.resumeListeners.push(listener);
+  }
+  // What mediasoup does when the peer mutes / unmutes.
+  producerPause() {
+    this.producerPaused = true;
+  }
+  producerResume() {
+    this.producerPaused = false;
+    for (const l of this.resumeListeners) l();
   }
   async resume() {
     this.resumed = true;
@@ -101,6 +115,7 @@ class FakeTransport implements RtpPlainTransport {
   constructor(
     public id: string,
     private readonly videoProducers: Set<string> = new Set(),
+    private readonly pausedProducers: Set<string> = new Set(),
   ) {}
   async connect(params: { ip: string; port: number }) {
     this.connected = params;
@@ -109,6 +124,7 @@ class FakeTransport implements RtpPlainTransport {
     this.consumer = new FakeConsumer(
       `consumer-${params.producerId}`,
       this.videoProducers.has(params.producerId),
+      this.pausedProducers.has(params.producerId),
     );
     return this.consumer;
   }
@@ -122,8 +138,14 @@ class FakeRouter implements RecordingRouter {
   transports: FakeTransport[] = [];
   // producer ids the room considers picture (video rooms only)
   videoProducers = new Set<string>();
+  // producer ids whose peer is muted at the moment they're consumed
+  pausedProducers = new Set<string>();
   async createPlainTransport() {
-    const t = new FakeTransport(`transport-${this.transports.length}`, this.videoProducers);
+    const t = new FakeTransport(
+      `transport-${this.transports.length}`,
+      this.videoProducers,
+      this.pausedProducers,
+    );
     this.transports.push(t);
     return t;
   }
@@ -333,6 +355,145 @@ describe("RecordingManager.addProducer / removeProducer", () => {
     const tracks = h.manager.getTrackFiles("room1");
     assert.equal(tracks.length, 2);
     assert.ok(tracks.some((t) => t.path.includes("alice__p1")));
+  });
+});
+
+describe("RecordingManager — muted producers and captures that end on their own", () => {
+  // ffmpeg's RTP input exits for good after ~20 s without a single packet. A
+  // producer paused (muted) when recording starts sends none, so its capture
+  // used to die before they ever unmuted, and that person was missing from the
+  // whole recording (seen in production: a 67 min, two-person call that came
+  // back with one voice).
+  let h: Harness;
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  const settle = () => new Promise((r) => setImmediate(r));
+  const consumerOf = (producerId: string) =>
+    h.router.transports.find((t) => t.consumer?.id === `consumer-${producerId}`)!.consumer!;
+  const captureOf = (who: string) => h.spawned.filter((p) => p.args.some((a) => a.includes(who)));
+
+  it("waits for a producer muted at the start, then captures it from when it unmutes", async () => {
+    h.router.pausedProducers.add("p2");
+    await h.manager.start("room1", h.router, PRODUCERS);
+
+    // alice is captured; bob's transport/port are ready but no ffmpeg runs yet
+    assert.equal(h.spawned.length, 1);
+    assert.equal(captureOf("bob__p2").length, 0);
+    assert.equal(consumerOf("p2").resumed, false);
+    assert.equal(h.ports.size, 2);
+
+    h.clock.t = 61_000; // bob unmutes a minute in
+    consumerOf("p2").producerResume();
+    await settle();
+
+    assert.equal(captureOf("bob__p2").length, 1);
+    assert.equal(consumerOf("p2").resumed, true);
+    const bob = h.manager.getMixInputs("room1").find((i) => i.path.includes("bob__p2"))!;
+    assert.equal(bob.delayMs, 60_000); // lines up with when his audio actually starts
+  });
+
+  it("an ordinary unmute mid-recording doesn't start a second capture", async () => {
+    await h.manager.start("room1", h.router, PRODUCERS);
+    consumerOf("p2").producerPause();
+    consumerOf("p2").producerResume();
+    await settle();
+    assert.equal(h.spawned.length, 2);
+  });
+
+  it("tears down a producer that stayed muted throughout, and never starts it late", async () => {
+    h.router.pausedProducers.add("p2");
+    await h.manager.start("room1", h.router, PRODUCERS);
+    await h.manager.finalize("room1");
+
+    const bobTransport = h.router.transports.find((t) => t.consumer?.id === "consumer-p2")!;
+    assert.equal(bobTransport.closed, true);
+    assert.equal(bobTransport.consumer!.closed, true);
+    assert.equal(h.ports.size, 0);
+
+    consumerOf("p2").producerResume(); // a straggling event after the stop
+    await settle();
+    assert.equal(captureOf("bob__p2").length, 0);
+  });
+
+  it("restarts a capture that timed out before receiving anything, in the same file", async () => {
+    await h.manager.start("room1", h.router, PRODUCERS);
+    const [first] = captureOf("bob__p2");
+    const file = first.args[first.args.length - 1];
+    h.headerOnlyFiles.add(file); // never got a packet
+
+    h.clock.t += 20_000;
+    first.emit("exit", 0, null);
+    await settle();
+
+    const bob = captureOf("bob__p2");
+    assert.equal(bob.length, 2);
+    assert.equal(bob[1].args[bob[1].args.length - 1], file);
+    assert.equal(h.manager.getRecording("room1")!.closedRecorders.length, 0);
+  });
+
+  it("keeps what an ended capture recorded and continues in a new segment", async () => {
+    await h.manager.start("room1", h.router, PRODUCERS);
+    const [first] = captureOf("bob__p2");
+
+    h.clock.t = 31_000;
+    first.emit("exit", 0, null); // it had captured audio (the harness default)
+    await settle();
+
+    const bob = captureOf("bob__p2");
+    assert.equal(bob.length, 2);
+    assert.ok(bob[1].args[bob[1].args.length - 1].endsWith("bob__p2-2.ogg"));
+    const inputs = h.manager
+      .getMixInputs("room1")
+      .filter((i) => i.path.includes("bob__p2"))
+      .map((i) => i.delayMs);
+    assert.deepEqual(inputs, [0, 30_000]); // both segments, each at its own time
+  });
+
+  it("waits for the resume when a capture ends while its producer is muted", async () => {
+    await h.manager.start("room1", h.router, PRODUCERS);
+    const [first] = captureOf("bob__p2");
+    consumerOf("p2").producerPause();
+
+    h.clock.t += 20_000;
+    first.emit("exit", 0, null);
+    await settle();
+    assert.equal(captureOf("bob__p2").length, 1);
+
+    consumerOf("p2").producerResume();
+    await settle();
+    assert.equal(captureOf("bob__p2").length, 2);
+  });
+
+  it("doesn't respawn a capture that fails straight away, only on the next resume", async () => {
+    await h.manager.start("room1", h.router, PRODUCERS);
+    const [first] = captureOf("bob__p2");
+    h.headerOnlyFiles.add(first.args[first.args.length - 1]);
+
+    first.emit("exit", 1, null); // died at once: not a timeout, a failure
+    await settle();
+    assert.equal(captureOf("bob__p2").length, 1);
+
+    consumerOf("p2").producerPause();
+    consumerOf("p2").producerResume();
+    await settle();
+    assert.equal(captureOf("bob__p2").length, 2);
+  });
+
+  it("never restarts a capture that removeProducer or finalize stopped", async () => {
+    await h.manager.start("room1", h.router, PRODUCERS);
+    const [alice] = captureOf("alice__p1");
+    const [bob] = captureOf("bob__p2");
+
+    await h.manager.removeProducer("room1", "p2");
+    h.clock.t += 20_000;
+    bob.emit("exit", 255, null);
+    await h.manager.finalize("room1");
+    alice.emit("exit", 255, null);
+    await settle();
+
+    assert.equal(h.spawned.length, 2);
   });
 });
 

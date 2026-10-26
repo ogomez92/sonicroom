@@ -8,6 +8,8 @@ import os from "node:os";
 import {
   buildSdp,
   buildCaptureArgs,
+  buildMixArgs,
+  buildPadArgs,
   buildTrackMp4Args,
   buildVideoMixArgs,
 } from "./recording-util.js";
@@ -435,6 +437,98 @@ describe(
       assert.ok(isBlack(late.right), `right cell at 9s: ${show(late.right)}`);
 
       assert.ok((await meanVolume(f("call.mp4"))) > -50, "the room's audio is on the call MP4");
+    });
+  },
+);
+
+// Mean volume of one window of `file`, in dBFS (about -91 for digital silence).
+async function windowVolume(file: string, atSec: number, durSec = 1): Promise<number> {
+  const { stderr } = await run(FFMPEG, [
+    "-v",
+    "info",
+    "-ss",
+    String(atSec),
+    "-t",
+    String(durSec),
+    "-i",
+    file,
+    "-af",
+    "volumedetect",
+    "-f",
+    "null",
+    "-",
+  ]);
+  const m = /mean_volume:\s*(-?[\d.]+|-inf) dB/.exec(stderr);
+  assert.ok(m, `no mean_volume in ffmpeg output:\n${stderr}`);
+  return m[1] === "-inf" ? -Infinity : Number(m[1]);
+}
+
+describe(
+  "mute gaps in audio downloads (real ffmpeg)",
+  { skip: !canRender && "ffmpeg/ffprobe not installed" },
+  () => {
+    // A muted producer sends no RTP, and resumes with timestamps that kept
+    // running, so its capture holds a timestamp GAP. ffmpeg cuts any Ogg gap
+    // over 10 s unless told not to (KEEP_TIMESTAMP_GAPS), which once shortened
+    // a 67 min track to 31 min. This capture has 2 s of tone, a 15 s mute, then
+    // 2 s more: the downloads must play it back at 0 s and at 17 s.
+    let dir: string;
+    const f = (name: string) => path.join(dir, name);
+
+    before(async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "sonicroom-gap-"));
+      await ffmpegOk([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=4",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "64k",
+        "-y",
+        f("tone.ogg"),
+      ]);
+      // Push every packet from 2 s on (96000 at Opus's 48 kHz) 15 s later.
+      await ffmpegOk([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        f("tone.ogg"),
+        "-c:a",
+        "copy",
+        "-bsf:a",
+        "setts=ts=TS+if(gte(TS\\,96000)\\,720000\\,0)",
+        "-y",
+        f("muted.ogg"),
+      ]);
+    });
+
+    after(() => {
+      if (dir) rmSync(dir, { recursive: true, force: true });
+    });
+
+    const assertGapKept = async (file: string) => {
+      assert.ok((await windowVolume(file, 0.5)) > -40, "tone before the mute");
+      assert.ok((await windowVolume(file, 8)) < -80, "silence where they were muted");
+      assert.ok((await windowVolume(file, 17.5)) > -40, "tone after the mute, at 17 s");
+    };
+
+    it("the per-track download plays a mute as silence, in place", async () => {
+      await ffmpegOk(
+        buildPadArgs({ path: f("muted.ogg"), delayMs: 0, totalMs: 19000 }),
+        f("pad.ogg"),
+      );
+      await assertGapKept(f("pad.ogg"));
+    });
+
+    it("the whole-call mix plays a mute as silence, in place", async () => {
+      await ffmpegOk(buildMixArgs([{ path: f("muted.ogg"), delayMs: 0 }]), f("mix.ogg"));
+      await assertGapKept(f("mix.ogg"));
     });
   },
 );

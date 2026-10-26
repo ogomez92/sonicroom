@@ -20,7 +20,9 @@ export function LanguageSelect({ className = "" }: { className?: string }) {
         className="cursor-pointer rounded-md border border-sonic-600 bg-sonic-700 px-2 py-1 text-sm text-sonic-100 focus:border-sonic-accent focus:outline-none"
       >
         {locales.map((l) => (
-          <option key={l} value={l}>
+          // Each name is in its own language (LOCALE_NAMES): tag it so a screen
+          // reader says "Español" with a Spanish voice, not an English one.
+          <option key={l} value={l} lang={l}>
             {LOCALE_NAMES[l]}
           </option>
         ))}

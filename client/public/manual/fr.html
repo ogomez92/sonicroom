@@ -624,6 +624,25 @@ l’autorisation, vous vous retrouvez de toute façon dans ce mode.</li>
 <code>Entrée</code> depuis n’importe quel champ de texte fonctionne
 aussi.</li>
 </ol>
+<p><strong>Le formulaire est plus court quand le salon existe
+déjà.</strong> Le type du salon, ses réglages P2P et public et ses
+options d’administration appartiennent à la personne qui le crée. Dès
+que le nom saisi est celui d’un salon ouvert en ce moment — que vous
+l’ayez tapé, choisi dans la liste publique ou reçu par un lien —, le
+hall ne garde que ce qu’il vous revient de changer : votre nom affiché,
+le test du micro, <em>Rejoindre sans microphone</em>, l’arrière-plan
+vidéo s’il s’agit d’un appel vidéo, et le bouton pour rejoindre. Votre
+lecteur d’écran l’annonce aussitôt (« Un salon nommé … est déjà ouvert :
+vous allez le rejoindre. Options du salon masquées. »), et la même
+explication reste sous le champ du nom du salon, relue chaque fois que
+vous y revenez. Remplacez le nom par un nom que personne n’utilise et
+les options reviennent, avec une annonce là aussi. Le hall vérifie un
+instant après la fin de la saisie et continue de vérifier tant que vous
+restez sur la page : le formulaire peut donc aussi changer tout seul si
+le salon s’ouvre ou se vide entre-temps. Un <a
+href="#salons-réservés-un-salon-quon-vous-a-attribué-à-lavance">salon
+réservé</a> que son hôte n’a pas encore ouvert se comporte de la même
+façon : rien n’y est à votre main, vous attendrez simplement l’hôte.</p>
 <hr />
 <h1 id="le-salon-partie-par-partie">Le salon, partie par partie</h1>
 <h2 id="en-tête">En-tête</h2>
@@ -976,18 +995,29 @@ message</td>
 <h1 id="savoir-ce-qui-se-passe">Savoir ce qui se passe</h1>
 <p>SonicRoom est bâti autour d’une règle : <strong>tout ce qui est
 annoncé au salon peut être relu ensuite.</strong></p>
-<p>Chaque événement du salon — quelqu’un est arrivé, quelqu’un a coupé
-son micro, un enregistrement a commencé, un fichier s’est lancé,
-quelqu’un a été exclu — est annoncé par une région active <em>et</em>
-écrit dans l’historique du chat comme message système. Rien n’est
-annoncé une fois puis perdu. Si votre lecteur d’écran était occupé, si
-vous étiez en train de taper, ou si cela vous a simplement échappé,
-appuyez sur <code>Alt</code> + <code>1</code> et remontez le fil.</p>
+<p>Chaque événement du salon — quelqu’un est arrivé, un enregistrement a
+commencé, un fichier s’est lancé, quelqu’un a été exclu — est annoncé
+par une région active <em>et</em> écrit dans l’historique du chat comme
+message système. Rien n’est annoncé une fois puis perdu. Si votre
+lecteur d’écran était occupé, si vous étiez en train de taper, ou si
+cela vous a simplement échappé, appuyez sur <code>Alt</code> +
+<code>1</code> et remontez le fil.</p>
 <p>Trois choses sont annoncées mais volontairement <em>non</em> écrites
 dans le chat, parce qu’elles concernent votre vue à vous et non le salon
 : vos changements de volume locaux, le fait de couper quelqu’un pour
 vous seul, et l’épinglage d’une vidéo. Personne d’autre n’est concerné,
 elles n’ont donc rien à faire dans une chronologie partagée.</p>
+<p><strong>Quand quelqu’un d’autre coupe ou réactive son micro, c’est un
+son, pas une phrase.</strong> Dans un salon animé, la touche de coupure
+ne s’arrête jamais, et « untel a coupé son micro » répété sans cesse
+enterre tout ce qui mérite d’être entendu. Alors quand quelqu’un d’autre
+se coupe ou se réactive, vous entendez le bref signal de coupure ou de
+réactivation et rien n’est annoncé ; sa ligne dans la liste des
+participants indique toujours « micro coupé », et <code>W</code> vous
+dit toujours qui parle. Un administrateur qui coupe quelqu’un <em>pour
+tout le salon</em>, c’est autre chose : cela reste un événement du
+salon, annoncé et écrit dans le chat, avec le nom de la personne qui l’a
+fait.</p>
 <p><strong>Signaux sonores.</strong> De brefs sons accompagnent la
 coupure et la réactivation du micro, l’arrivée et le départ de
 quelqu’un, un nouveau message, le début et la fin d’un partage,

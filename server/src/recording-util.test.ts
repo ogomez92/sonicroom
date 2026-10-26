@@ -16,6 +16,7 @@ import {
   captureExtension,
   gridLayout,
   pairTracks,
+  KEEP_TIMESTAMP_GAPS,
   type RecorderMeta,
 } from "./recording-util.js";
 
@@ -147,21 +148,48 @@ describe("buildCaptureArgs", () => {
   });
 });
 
+describe("KEEP_TIMESTAMP_GAPS", () => {
+  // Every renderer that reads an Ogg capture must pass it before its inputs,
+  // or ffmpeg cuts out any mute longer than 10 s (see the constant).
+  const renderers: Array<[string, string[]]> = [
+    ["buildMixArgs", buildMixArgs([{ path: "/tmp/a.ogg", delayMs: 0 }])],
+    ["buildPadArgs", buildPadArgs({ path: "/tmp/a.ogg", delayMs: 0, totalMs: 1000 })],
+    [
+      "buildTrackMp4Args",
+      buildTrackMp4Args({
+        video: { path: "/tmp/cam.webm", delayMs: 0 },
+        audio: { path: "/tmp/a.ogg", delayMs: 0 },
+        totalMs: 1000,
+      }),
+    ],
+    [
+      "buildVideoMixArgs",
+      buildVideoMixArgs({
+        video: [{ path: "/tmp/cam.webm", delayMs: 0 }],
+        audio: [{ path: "/tmp/a.ogg", delayMs: 0 }],
+        totalMs: 1000,
+      }),
+    ],
+  ];
+  for (const [name, args] of renderers) {
+    it(`${name} keeps timestamp gaps for aresample to fill`, () => {
+      const at = args.indexOf(KEEP_TIMESTAMP_GAPS[0]);
+      assert.ok(at >= 0, `${name} is missing ${KEEP_TIMESTAMP_GAPS[0]}`);
+      assert.deepEqual(args.slice(at, at + KEEP_TIMESTAMP_GAPS.length), KEEP_TIMESTAMP_GAPS);
+      assert.ok(at < args.indexOf("-i"), `${name} must set it before the first input`);
+    });
+  }
+});
+
 describe("buildMixArgs", () => {
-  it("copies a single zero-offset input straight to stdout", () => {
+  it("sends a single zero-offset input through the gap-filling chain too", () => {
+    // A `-c:a copy` shortcut would hand players mute gaps as bare timestamp
+    // jumps, which most of them close up instead of playing as silence.
     const args = buildMixArgs([{ path: "/tmp/a.ogg", delayMs: 0 }]);
-    assert.deepEqual(args, [
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      "/tmp/a.ogg",
-      "-c:a",
-      "copy",
-      "-f",
-      "ogg",
-      "pipe:1",
-    ]);
+    const fc = args[args.indexOf("-filter_complex") + 1];
+    assert.ok(fc.includes("[0:a]aformat=channel_layouts=stereo,aresample=async=1[a0]"));
+    assert.ok(!args.includes("copy"));
+    assert.deepEqual(args.slice(-2), ["ogg", "pipe:1"]);
   });
 
   it("mixes multiple inputs with per-input delay and no volume normalization", () => {

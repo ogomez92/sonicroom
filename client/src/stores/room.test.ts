@@ -292,6 +292,19 @@ describe("announce and announceEvent", () => {
     expect(m.sender).toBe("");
   });
 
+  it("tags event lines with their locale; readback keeps it across a switch", () => {
+    useRoomStore.getState().announceEvent("recording started");
+    const line = useRoomStore.getState().messages[0];
+    expect(line.lang).toBe("en");
+    expect(useRoomStore.getState().announcementLang).toBeNull();
+    useRoomStore.getState().setLanguage("es");
+    useRoomStore.getState().announce(line.text, line.lang);
+    expect(useRoomStore.getState().announcementLang).toBe("en");
+    // Same language as the UI → no override.
+    useRoomStore.getState().announce("hola", "es");
+    expect(useRoomStore.getState().announcementLang).toBeNull();
+  });
+
   it("announceEvent respects the 200-message cap", () => {
     const s = useRoomStore.getState();
     for (let i = 0; i < 200; i++) s.addMessage(msg(`m${i}`));

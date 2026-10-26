@@ -158,6 +158,21 @@ export function captureExtension(kind: TrackKind): string {
   return kind === "video" ? "webm" : "ogg";
 }
 
+// Global ffmpeg options for every renderer that READS the Ogg captures (mix,
+// per-track pad, and the video-room MP4s); they go before the first -i.
+//
+// A capture's timestamp gaps ARE its mutes: a paused producer sends no RTP and
+// comes back with timestamps that kept advancing in real time, and the Ogg
+// keeps that jump. We fill those gaps with silence (`aresample=async=1`), but
+// the ffmpeg CLI treats Ogg as a "discontinuous timestamps" format and CUTS
+// any jump larger than -dts_delta_threshold (default 10 s) at demux time,
+// before aresample ever sees it. So every mute longer than 10 s used to vanish
+// from the download: tracks came out minutes short and out of sync with each
+// other (seen in production: 36 min of a 67 min track collapsed away). Raise
+// the threshold past any possible recording length. Backward jumps are still
+// corrected; that check doesn't use this threshold.
+export const KEEP_TIMESTAMP_GAPS = ["-dts_delta_threshold", "1000000"];
+
 export interface MixInput {
   path: string;
   // ms by which this stream started after the recording began; used to keep
@@ -171,36 +186,35 @@ export interface MixInput {
 export function buildMixArgs(inputs: MixInput[]): string[] {
   if (inputs.length === 0) throw new Error("buildMixArgs: no inputs");
 
-  const args: string[] = ["-hide_banner", "-loglevel", "warning"];
+  const args: string[] = ["-hide_banner", "-loglevel", "warning", ...KEEP_TIMESTAMP_GAPS];
   for (const input of inputs) {
     args.push("-i", input.path);
   }
 
-  if (inputs.length === 1 && inputs[0].delayMs <= 0) {
-    // Single stream, no offset — stream it straight through, no re-encode.
-    args.push("-c:a", "copy");
-  } else {
-    const parts: string[] = [];
-    const labels: string[] = [];
-    inputs.forEach((input, i) => {
-      const label = `a${i}`;
-      labels.push(`[${label}]`);
-      const d = Math.max(0, Math.round(input.delayMs));
-      // Per-input chain, in order:
-      //  - aformat upmixes mono voice to stereo BEFORE amix (amix adopts the
-      //    first input's layout, so a mono-first mix would fold the stereo
-      //    music/share tracks down to mono);
-      //  - aresample async fills timestamp gaps with silence so a track that
-      //    paused mid-recording (mute, share stopped) stays time-aligned;
-      //  - adelay shifts a late-joining stream so voices line up in time.
-      const chain = `aformat=channel_layouts=stereo,aresample=async=1${d > 0 ? `,adelay=${d}:all=1` : ""}`;
-      parts.push(`[${i}:a]${chain}[${label}]`);
-    });
-    // normalize=0 keeps each voice at full level instead of dividing by N
-    // (which would make everyone quieter as more people join).
-    const filter = `${parts.join(";")};${labels.join("")}amix=inputs=${inputs.length}:normalize=0[out]`;
-    args.push("-filter_complex", filter, "-map", "[out]", "-c:a", "libopus", "-b:a", "96k");
-  }
+  // Always through the filter chain, even for a single stream: a `-c:a copy`
+  // shortcut would pass mute gaps through as bare timestamp jumps, which most
+  // players close up instead of playing as silence.
+  const parts: string[] = [];
+  const labels: string[] = [];
+  inputs.forEach((input, i) => {
+    const label = `a${i}`;
+    labels.push(`[${label}]`);
+    const d = Math.max(0, Math.round(input.delayMs));
+    // Per-input chain, in order:
+    //  - aformat upmixes mono voice to stereo BEFORE amix (amix adopts the
+    //    first input's layout, so a mono-first mix would fold the stereo
+    //    music/share tracks down to mono);
+    //  - aresample async fills timestamp gaps with silence so a track that
+    //    paused mid-recording (mute, share stopped) stays time-aligned (see
+    //    KEEP_TIMESTAMP_GAPS for why the gaps survive to reach it);
+    //  - adelay shifts a late-joining stream so voices line up in time.
+    const chain = `aformat=channel_layouts=stereo,aresample=async=1${d > 0 ? `,adelay=${d}:all=1` : ""}`;
+    parts.push(`[${i}:a]${chain}[${label}]`);
+  });
+  // normalize=0 keeps each voice at full level instead of dividing by N
+  // (which would make everyone quieter as more people join).
+  const filter = `${parts.join(";")};${labels.join("")}amix=inputs=${inputs.length}:normalize=0[out]`;
+  args.push("-filter_complex", filter, "-map", "[out]", "-c:a", "libopus", "-b:a", "96k");
 
   args.push("-f", "ogg", "pipe:1");
   return args;
@@ -241,6 +255,7 @@ export function buildPadArgs(input: PadInput): string[] {
     "-hide_banner",
     "-loglevel",
     "warning",
+    ...KEEP_TIMESTAMP_GAPS,
     "-i",
     input.path,
     "-af",
@@ -463,7 +478,8 @@ export function buildTrackMp4Args(input: Mp4TrackInput): string[] {
   const h = input.height ?? TRACK_VIDEO_HEIGHT;
   const total = secs(input.totalMs);
 
-  const args = ["-hide_banner", "-loglevel", "warning", "-i", input.video.path];
+  const args = ["-hide_banner", "-loglevel", "warning", ...KEEP_TIMESTAMP_GAPS];
+  args.push("-i", input.video.path);
   if (input.audio) args.push("-i", input.audio.path);
 
   // tpad's stop_duration runs the picture out past the end; -t then cuts every
@@ -514,7 +530,7 @@ export function buildVideoMixArgs(spec: VideoMixSpec): string[] {
   const layout = gridLayout(spec.video.length, spec.cellWidth, spec.maxWidth);
   const total = secs(spec.totalMs);
 
-  const args = ["-hide_banner", "-loglevel", "warning"];
+  const args = ["-hide_banner", "-loglevel", "warning", ...KEEP_TIMESTAMP_GAPS];
   // Picture inputs first, then sound, so the filter indices below are stable.
   for (const v of spec.video) args.push("-i", v.path);
   for (const a of spec.audio) args.push("-i", a.path);

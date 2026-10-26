@@ -239,6 +239,24 @@ En orden, de arriba abajo:
 11. **Entrar en la sala** — el botón de envío. También vale pulsar `Enter` desde
     cualquiera de los campos de texto.
 
+**El formulario es más corto cuando la sala ya existe.** El tipo de sala, los
+ajustes de P2P y de sala pública y las opciones de administración son de quien
+la crea. Por eso, en cuanto el nombre del campo es el de una sala que está
+abierta ahora mismo — lo hayas escrito, elegido en la lista pública o hayas
+llegado por un enlace —, el vestíbulo deja solo lo que te toca a ti cambiar: tu
+nombre visible, la prueba de micrófono, _Entrar sin micrófono_, el fondo de vídeo
+si es una videollamada y el botón de entrar. Tu lector de pantalla lo dice en el
+momento («Has puesto una sala que ya existe, …: vas a unirte a ella. Ocultando
+las opciones de sala.»), y la misma explicación queda bajo el campo del nombre
+de la sala, de modo que se vuelve a leer cada vez que llegas a él. Cambia el
+nombre por uno que no use nadie y las opciones vuelven, también con aviso. El
+vestíbulo lo comprueba un instante después de que dejes de escribir y lo sigue
+comprobando mientras estás en la página, así que el formulario también puede
+cambiar solo si entretanto la sala se abre o se queda vacía. Una
+[sala reservada](#salas-reservadas-una-sala-que-te-han-dado-de-antemano) que su anfitrión aún no ha abierto se
+comporta igual: ahí no hay nada que te toque elegir, simplemente esperarás al
+anfitrión.
+
 ---
 
 # La sala, parte por parte
@@ -412,7 +430,7 @@ AZERTY, Dvorak o cualquier otra distribución.
 SonicRoom está construido en torno a una regla: **todo lo que se le dice a la
 sala se puede volver a leer después.**
 
-Cada suceso de la sala — alguien ha entrado, alguien se ha silenciado, ha
+Cada suceso de la sala — alguien ha entrado, ha
 empezado una grabación, ha empezado a sonar un archivo, han expulsado a alguien —
 se dice por una región activa _y además_ se escribe en el historial del chat como
 mensaje del sistema. Nada se anuncia una vez y se pierde. Si tu lector de
@@ -423,6 +441,15 @@ Tres cosas se dicen pero a propósito _no_ se escriben en el chat, porque afecta
 tu vista y no a la sala: tus cambios de volumen locales, silenciar a alguien solo
 para ti, y fijar un vídeo. Nadie más se ve afectado, así que no pintan nada en una
 línea de tiempo compartida.
+
+**Que otra persona se silencie o se active es un sonido, no una frase.** En una
+sala con gente la tecla de silencio no para quieta, y «fulanito ha silenciado su
+micrófono» una y otra vez entierra todo lo que merece la pena oír. Así que cuando
+otra persona se silencia o se activa oyes el aviso corto de silencio o de
+activación y no se dice nada; su fila en la lista de participantes sigue leyéndose
+«silenciado», y `W` te sigue diciendo quién habla. Que un administrador silencie a
+alguien _para toda la sala_ es otra cosa: eso sí es un suceso de la sala, se dice y
+se escribe en el chat, con el nombre de quien lo ha hecho.
 
 **Señales sonoras.** Suenan avisos cortos al silenciar y activar el micrófono, al
 entrar o salir alguien, al llegar un mensaje de chat, al empezar o terminar una

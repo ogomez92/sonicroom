@@ -200,11 +200,13 @@ export function Chat({ onSend, onClose, focusSignal, composer = "on" }: ChatProp
             >
               {msg.kind ? (
                 <span className="text-xs italic text-sonic-400">
-                  {msg.kind === "join"
-                    ? m.chat_joined({ name: msg.sender })
-                    : msg.kind === "leave"
-                      ? m.chat_left({ name: msg.sender })
-                      : msg.text}
+                  {msg.kind === "join" ? (
+                    m.chat_joined({ name: msg.sender })
+                  ) : msg.kind === "leave" ? (
+                    m.chat_left({ name: msg.sender })
+                  ) : (
+                    <span lang={msg.lang}>{msg.text}</span>
+                  )}
                   {META_SEP}
                   {relativeTime(msg.ts, now)}
                 </span>

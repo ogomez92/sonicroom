@@ -99,6 +99,9 @@ export function installMediaMock() {
       getUserMedia: (c: MediaStreamConstraints) => mediaController.getUserMedia(c),
       getDisplayMedia: (o: unknown) => mediaController.getDisplayMedia(o),
       enumerateDevices: () => Promise.resolve([]),
+      // DeviceSettings subscribes to "devicechange"; nothing ever fires it here.
+      addEventListener: () => {},
+      removeEventListener: () => {},
     },
   });
 }

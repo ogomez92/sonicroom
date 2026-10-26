@@ -247,6 +247,23 @@ Dans l'ordre, de haut en bas :
 11. **Rejoindre le salon** — le bouton de validation. `Entrée` depuis n'importe
     quel champ de texte fonctionne aussi.
 
+**Le formulaire est plus court quand le salon existe déjà.** Le type du salon,
+ses réglages P2P et public et ses options d'administration appartiennent à la
+personne qui le crée. Dès que le nom saisi est celui d'un salon ouvert en ce
+moment — que vous l'ayez tapé, choisi dans la liste publique ou reçu par un
+lien —, le hall ne garde que ce qu'il vous revient de changer : votre nom
+affiché, le test du micro, _Rejoindre sans microphone_, l'arrière-plan vidéo s'il
+s'agit d'un appel vidéo, et le bouton pour rejoindre. Votre lecteur d'écran
+l'annonce aussitôt (« Un salon nommé … est déjà ouvert : vous allez le rejoindre.
+Options du salon masquées. »), et la même explication reste sous le champ du nom
+du salon, relue chaque fois que vous y revenez. Remplacez le nom par un nom que
+personne n'utilise et les options reviennent, avec une annonce là aussi.
+Le hall vérifie un instant après la fin de la saisie et continue de vérifier
+tant que vous restez sur la page : le formulaire peut donc aussi changer tout
+seul si le salon s'ouvre ou se vide entre-temps. Un
+[salon réservé](#salons-réservés-un-salon-quon-vous-a-attribué-à-lavance) que son hôte n'a pas encore ouvert se comporte
+de la même façon : rien n'y est à votre main, vous attendrez simplement l'hôte.
+
 ---
 
 # Le salon, partie par partie
@@ -422,7 +439,7 @@ n'importe quelle autre disposition.
 SonicRoom est bâti autour d'une règle : **tout ce qui est annoncé au salon peut
 être relu ensuite.**
 
-Chaque événement du salon — quelqu'un est arrivé, quelqu'un a coupé son micro, un
+Chaque événement du salon — quelqu'un est arrivé, un
 enregistrement a commencé, un fichier s'est lancé, quelqu'un a été exclu — est
 annoncé par une région active _et_ écrit dans l'historique du chat comme message
 système. Rien n'est annoncé une fois puis perdu. Si votre lecteur d'écran était
@@ -434,6 +451,16 @@ qu'elles concernent votre vue à vous et non le salon : vos changements de volum
 locaux, le fait de couper quelqu'un pour vous seul, et l'épinglage d'une vidéo.
 Personne d'autre n'est concerné, elles n'ont donc rien à faire dans une chronologie
 partagée.
+
+**Quand quelqu'un d'autre coupe ou réactive son micro, c'est un son, pas une
+phrase.** Dans un salon animé, la touche de coupure ne s'arrête jamais, et
+« untel a coupé son micro » répété sans cesse enterre tout ce qui mérite d'être
+entendu. Alors quand quelqu'un d'autre se coupe ou se réactive, vous entendez le
+bref signal de coupure ou de réactivation et rien n'est annoncé ; sa ligne dans la
+liste des participants indique toujours « micro coupé », et `W` vous dit toujours
+qui parle. Un administrateur qui coupe quelqu'un _pour tout le salon_, c'est autre
+chose : cela reste un événement du salon, annoncé et écrit dans le chat, avec le
+nom de la personne qui l'a fait.
 
 **Signaux sonores.** De brefs sons accompagnent la coupure et la réactivation du
 micro, l'arrivée et le départ de quelqu'un, un nouveau message, le début et la

@@ -389,6 +389,9 @@ interface RoomState {
   // `announceSeq` changes on every announce() so React re-renders even when
   // the same message repeats.
   announcement: string;
+  // Language of `announcement` when it differs from the UI's (an Alt+number
+  // readback of an event logged before a language switch); null = the UI's.
+  announcementLang: string | null;
   announceSeq: number;
 
   // Chat-message announcements are kept on their OWN channel, separate from the
@@ -506,7 +509,8 @@ interface RoomState {
   setStreaming: (streaming: boolean) => void;
   setStreamConfig: (config: StreamConfig) => void;
   setStreamError: (error: string | null) => void;
-  announce: (message: string) => void;
+  // `lang`: pass only when the text isn't in the current UI language.
+  announce: (message: string, lang?: string) => void;
   announceEvent: (message: string) => void;
   setChatAnnounceMode: (mode: ChatAnnounceMode) => void;
   // Announce a chat message via whichever channel chatAnnounceMode selects.
@@ -590,6 +594,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   streamConfig: loadStreamConfig(),
   streamError: null,
   announcement: "",
+  announcementLang: null,
   announceSeq: 0,
   chatAnnounceMode: loadChatAnnounceMode(),
   chatPoliteMsg: "",
@@ -707,7 +712,12 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     set({ streamConfig });
   },
   setStreamError: (streamError) => set({ streamError }),
-  announce: (message) => set((s) => ({ announcement: message, announceSeq: s.announceSeq + 1 })),
+  announce: (message, lang) =>
+    set((s) => ({
+      announcement: message,
+      announcementLang: lang && lang !== s.locale ? lang : null,
+      announceSeq: s.announceSeq + 1,
+    })),
   setJoinRequests: (joinRequests) => set({ joinRequests }),
   setAwaitingApproval: (awaitingApproval) => set({ awaitingApproval }),
   setAwaitingHost: (awaitingHost) => set({ awaitingHost }),
@@ -819,11 +829,17 @@ export const useRoomStore = create<RoomState>((set, get) => ({
           text: message,
           ts,
           kind: "system" as const,
+          lang: s.locale,
         },
       ];
       if (messages.length > CHAT_MESSAGES_MAX)
         messages.splice(0, messages.length - CHAT_MESSAGES_MAX);
-      return { announcement: message, announceSeq: s.announceSeq + 1, messages };
+      return {
+        announcement: message,
+        announcementLang: null,
+        announceSeq: s.announceSeq + 1,
+        messages,
+      };
     }),
 
   setChatAnnounceMode: (mode) => {
@@ -1011,6 +1027,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       isStreaming: false,
       streamError: null,
       announcement: "",
+      announcementLang: null,
       announceSeq: 0,
       // Keep chatAnnounceMode (a persisted preference); only the live strings reset.
       chatPoliteMsg: "",

@@ -229,6 +229,22 @@ In order, top to bottom:
 11. **Join Room** — the submit button. `Enter` from any of the text fields works
     too.
 
+**The form is shorter when the room already exists.** A room's type, its P2P
+and public settings and its admin options belong to whoever creates it. So as
+soon as the name in the field is a room that is open right now — whether you
+typed it, picked it from the public list or arrived through a link — the lobby
+keeps only what is yours to change: your display name, the microphone test,
+_Join without a microphone_, the video background if it is a video room, and the
+Join button. Your screen reader says so when it happens ("A room named … is
+already open, so you'll be joining it. Hiding the room options."), and the same
+explanation sits under the room name field, read again whenever you land on it.
+Change the name to one nobody is using and the options come back, again with an
+announcement. The lobby checks a moment after you stop typing, and keeps
+checking while you stay on the page, so the form can also change by itself if a
+room opens or empties in the meantime. A [reserved room](#reserved-rooms-a-room-you-were-given-in-advance) that
+its host has not opened yet behaves the same way: nothing there is yours to
+choose, you will simply wait for the host.
+
 ---
 
 # The room, part by part
@@ -394,7 +410,7 @@ Dvorak or any other layout.
 SonicRoom is built around one rule: **anything the room is told, you can read
 again later.**
 
-Every room event — somebody joined, somebody muted, a recording started, a file
+Every room event — somebody joined, a recording started, a file
 started playing, somebody was removed — is spoken through a live region _and_
 written into the chat history as a system message. Nothing is announced once and
 lost. If your screen reader was busy, or you were typing, or you simply missed
@@ -404,6 +420,14 @@ Three things are spoken but deliberately _not_ written to chat, because they are
 about your own view rather than about the room: your own local volume changes,
 muting somebody for yourself, and pinning a video. Nobody else is affected by
 those, so they do not belong in a shared timeline.
+
+**Other people muting and unmuting is a sound, not a sentence.** In a busy room
+the mute key gets ridden constantly, and "so-and-so muted their microphone" over
+and over buries everything worth hearing. So when somebody else mutes or unmutes
+themselves you get the short mute or unmute cue and nothing spoken; their row in
+the participant list still reads "muted", and `W` still tells you who is talking.
+An administrator muting somebody _for everyone_ is different — that is a room
+event, and it is both spoken and written to the chat, naming who did it.
 
 **Sound cues.** Short sounds play for mute, unmute, someone joining, someone
 leaving, a new chat message, a share starting or stopping, someone knocking to

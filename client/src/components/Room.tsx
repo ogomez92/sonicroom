@@ -254,6 +254,7 @@ export function Room() {
   const streamMonitorVolume = useRoomStore((s) => s.streamMonitorVolume);
   const messages = useRoomStore((s) => s.messages);
   const announcement = useRoomStore((s) => s.announcement);
+  const announcementLang = useRoomStore((s) => s.announcementLang);
   const announceSeq = useRoomStore((s) => s.announceSeq);
   // Bare (transient) announcer for local mute toggles — not logged to chat.
   const announce = useRoomStore((s) => s.announce);
@@ -414,7 +415,9 @@ export function Room() {
             return;
           }
           lastAltNumRef.current = { digit, at: now };
-          announce(msg ? formatMessage(msg, now) : m.room_no_message({ n }));
+          // A system line keeps the language it was logged in (see ChatMessage.lang).
+          if (msg) announce(formatMessage(msg, now), msg.kind === "system" ? msg.lang : undefined);
+          else announce(m.room_no_message({ n }));
           return;
         }
         // Alt+N: open (creating on first use) the room's shared notes in a new
@@ -848,7 +851,9 @@ export function Room() {
       {/* Screen reader announcements (peer join/leave, recording, etc.).
           key changes per announcement so identical messages re-announce. */}
       <div aria-live="polite" role="status" className="sr-only" id="sr-announcements">
-        <span key={announceSeq}>{announcement}</span>
+        <span key={announceSeq} lang={announcementLang ?? undefined}>
+          {announcement}
+        </span>
       </div>
 
       {/* Chat-message announcements on their OWN regions so they can follow the
