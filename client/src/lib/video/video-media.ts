@@ -91,6 +91,9 @@ export class VideoMedia {
   // True only between the getUserMedia call and rawCameraStream being set —
   // the one window cameraActive can't cover.
   private starting = false;
+  // Bumped by stopCamera/teardownAll, so a start still awaiting the camera
+  // permission prompt knows it was cancelled and releases the device.
+  private cameraSession = 0;
   // Outgoing screen video: the display-capture video track (the audio half, if
   // any, lives in OutgoingAudioGraph's share) + its producer.
   private screenTrack: MediaStreamTrack | null = null;
@@ -133,6 +136,7 @@ export class VideoMedia {
   async startCamera(): Promise<void> {
     if (this.cameraActive || this.starting) return;
     this.starting = true;
+    const session = this.cameraSession;
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: CAMERA_CONSTRAINTS });
@@ -143,6 +147,10 @@ export class VideoMedia {
       return;
     } finally {
       this.starting = false;
+    }
+    if (this.cameraSession !== session) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
     }
     this.rawCameraStream = stream;
     // The OS/browser can end the track (device unplugged, permission revoked,
@@ -190,6 +198,7 @@ export class VideoMedia {
   // Turn our camera off: close the producer, stop the capture, tell the room
   // (which authoritatively closes the server-side producer + announces).
   async stopCamera(): Promise<void> {
+    this.cameraSession++;
     if (!this.cameraActive) return;
     this.closeCameraProducer();
     this.closeCamera();
@@ -201,7 +210,8 @@ export class VideoMedia {
   }
 
   async toggleCamera(): Promise<void> {
-    if (this.cameraActive) await this.stopCamera();
+    // A second press while the permission prompt is up cancels the start.
+    if (this.cameraActive || this.starting) await this.stopCamera();
     else await this.startCamera();
   }
 
@@ -396,6 +406,7 @@ export class VideoMedia {
 
   // Leave: everything, including our own captures.
   teardownAll(): void {
+    this.cameraSession++;
     this.closeProducers();
     this.closeCamera();
     this.screenTrack?.stop();
