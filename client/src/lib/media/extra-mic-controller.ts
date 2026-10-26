@@ -31,6 +31,10 @@ interface ExtraMicEntry {
   source: MediaStreamAudioSourceNode;
   dest: MediaStreamAudioDestinationNode;
   producer: Producer | null;
+  // The produce in flight, if any: startOne and produceAll (setupSfu) can both
+  // reach produceOne for one device, and the second must await the first
+  // rather than produce a duplicate, unstoppable producer.
+  producing?: Promise<void>;
   stereo: boolean;
 }
 
@@ -63,6 +67,7 @@ export class ExtraMicController {
   private chain: Promise<void> = Promise.resolve();
   // Baseline of the last reconciled selection, diffed against the desired set.
   private prevDesired = new Map<string, boolean>();
+  private readonly capturing = new Map<string, Promise<ExtraMicEntry>>();
 
   // The context is taken as a getter so it can be created lazily (iOS creates
   // it only once the mic is open — see shared-context.ts); a plain context is
@@ -96,7 +101,19 @@ export class ExtraMicController {
   // Idempotent while the capture is live AND already at the requested layout;
   // otherwise re-acquires + rebuilds the nodes (the track died, or a mono↔stereo
   // flip needs a fresh capture with the new channelCount).
-  private async ensureGraph(deviceId: string, stereo: boolean): Promise<ExtraMicEntry> {
+  // Concurrent callers for one device share the capture in flight, so two
+  // getUserMedia calls can't each build an entry (one leaking its capture).
+  private ensureGraph(deviceId: string, stereo: boolean): Promise<ExtraMicEntry> {
+    const pending = this.capturing.get(deviceId);
+    if (pending) return pending;
+    const capture = this.acquireGraph(deviceId, stereo).finally(() => {
+      this.capturing.delete(deviceId);
+    });
+    this.capturing.set(deviceId, capture);
+    return capture;
+  }
+
+  private async acquireGraph(deviceId: string, stereo: boolean): Promise<ExtraMicEntry> {
     resumeContext(this.ctx);
     const existing = this.mics.get(deviceId);
     const liveTrack = existing?.stream.getAudioTracks()[0];
@@ -133,13 +150,14 @@ export class ExtraMicController {
     const device = this.deps.getDevice();
     if (!sendTransport || !device) return;
     const entry = await this.ensureGraph(deviceId, stereo);
+    if (entry.producing) return entry.producing;
     if (entry.producer && !entry.producer.closed) return;
     // Produce the Web Audio DESTINATION track. The dest track has no label, so the
     // device's human name comes off the RAW capture track ("Tyler's mic: …").
     const track = entry.dest.stream.getAudioTracks()[0];
     if (!track) return;
     const deviceLabel = entry.stream.getAudioTracks()[0]?.label || undefined;
-    entry.producer = await sendTransport.produce({
+    const producing = sendTransport.produce({
       track,
       codecOptions: {
         opusStereo: stereo,
@@ -156,12 +174,38 @@ export class ExtraMicController {
       // mediasoup-client stop it when this producer closes (see produceShare).
       stopTracks: false,
     });
+    entry.producing = producing
+      .then((producer) => {
+        // Stopped while producing: don't keep a producer nobody can stop.
+        if (this.mics.get(deviceId) === entry) entry.producer = producer;
+        else producer.close();
+      })
+      .finally(() => {
+        entry.producing = undefined;
+      });
+    return entry.producing;
+  }
+
+  // Release one entry's producer, nodes and capture (no server emit).
+  private release(entry: ExtraMicEntry) {
+    if (entry.producer && !entry.producer.closed) entry.producer.close();
+    entry.source.disconnect();
+    entry.dest.disconnect();
+    entry.stream.getTracks().forEach((t) => t.stop());
   }
 
   // Rebuild every selected extra mic — called from setupSfuInner on a mode switch
   // into SFU or a reconnect. One dead device must not abort the others.
   async produceAll() {
     const { streamedMicDeviceIds, micStereoByDevice, micDeviceId } = this.store.getState();
+    // Devices unchecked while disconnected: reconcile only advanced its baseline
+    // then, so nothing else will ever stop their (still live) capture.
+    for (const [deviceId, entry] of this.mics) {
+      if (!streamedMicDeviceIds.includes(deviceId) || deviceId === micDeviceId) {
+        this.release(entry);
+        this.mics.delete(deviceId);
+      }
+    }
     for (const deviceId of streamedMicDeviceIds) {
       if (!deviceId || deviceId === micDeviceId) continue;
       try {
@@ -199,10 +243,7 @@ export class ExtraMicController {
     const entry = this.mics.get(deviceId);
     if (!entry) return;
     const producerId = entry.producer?.id;
-    if (entry.producer && !entry.producer.closed) entry.producer.close();
-    entry.source.disconnect();
-    entry.dest.disconnect();
-    entry.stream.getTracks().forEach((t) => t.stop());
+    this.release(entry);
     this.mics.delete(deviceId);
     // Always signal the server: with a producerId it closes that producer; with none
     // (we never reached SFU) it just reconciles the set so the SFU pin can't leak.
@@ -261,12 +302,7 @@ export class ExtraMicController {
   // Tear down every capture + its nodes + producer (leave). App-owned tracks would
   // otherwise leak across rooms.
   teardownAll() {
-    for (const entry of this.mics.values()) {
-      if (entry.producer && !entry.producer.closed) entry.producer.close();
-      entry.source.disconnect();
-      entry.dest.disconnect();
-      entry.stream.getTracks().forEach((t) => t.stop());
-    }
+    for (const entry of this.mics.values()) this.release(entry);
     this.mics.clear();
   }
 }

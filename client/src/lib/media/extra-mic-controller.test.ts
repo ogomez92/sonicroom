@@ -108,6 +108,31 @@ describe("ExtraMicController", () => {
     expect(ctrl.deviceIdForProducer(pid)).toBeNull();
   });
 
+  it("concurrent produces for one device make a single producer", async () => {
+    const { ctrl, wireSfu } = makeController();
+    const send = wireSfu();
+    useRoomStore.getState().setStreamedMicDeviceIds(["cable-1"]);
+
+    await Promise.all([ctrl.produceAll(), ctrl.produceAll()]);
+
+    expect(send.producers).toHaveLength(1);
+  });
+
+  it("produceAll releases a device that was unchecked while disconnected", async () => {
+    const { ctrl, wireSfu } = makeController();
+    const send = wireSfu();
+    useRoomStore.getState().setStreamedMicDeviceIds(["cable-1", "cable-2"]);
+    await ctrl.produceAll();
+    const dropped = send.producers.find((p) => ctrl.deviceIdForProducer(p.id) === "cable-2")!;
+
+    useRoomStore.getState().setStreamedMicDeviceIds(["cable-1"]);
+    ctrl.reconcile(new Map([["cable-1", false]]), false); // offline: baseline only
+    await ctrl.produceAll(); // the rejoin
+
+    expect(dropped.closed).toBe(true);
+    expect(ctrl.deviceIdForProducer(dropped.id)).toBeNull();
+  });
+
   it("skips the primary mic so the same capture never streams twice", async () => {
     const { ctrl, wireSfu } = makeController();
     const send = wireSfu();
