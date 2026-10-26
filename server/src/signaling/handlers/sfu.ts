@@ -19,10 +19,18 @@ export function registerSfuHandlers(ctx: ConnectionContext) {
       const { direction } = z.object({ direction: z.enum(["send", "recv"]) }).parse(data);
       const { transport, params } = await createWebRtcTransport(session.currentRoom);
 
+      // Close the transport this one replaces (and the producers/consumers that
+      // lived on it): an orphaned transport keeps its UDP ports, and repeated
+      // requests could exhaust the server's whole RTC port range.
+      const peer = session.currentPeer;
       if (direction === "send") {
-        session.currentPeer.sendTransport = transport;
+        peer.sendTransport?.close();
+        peer.producers.clear();
+        peer.sendTransport = transport;
       } else {
-        session.currentPeer.recvTransport = transport;
+        peer.recvTransport?.close();
+        peer.consumers.clear();
+        peer.recvTransport = transport;
       }
 
       cb({ ok: true, params });
