@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Peer } from "../../room-manager.js";
+import { admittedNameKey, type Peer } from "../../room-manager.js";
 import type { ConnectionContext } from "../context.js";
 import { kickMode } from "../../moderation-util.js";
 
@@ -39,7 +39,7 @@ export function registerModerationHandlers(ctx: ConnectionContext) {
       if (pending.ip) room.bannedIps.add(pending.ip);
       // Drop the name from the auto-admit set: a denial overrides any earlier
       // admission, so this name must knock again rather than walk back in.
-      room.admittedNames.delete(pending.displayName);
+      room.admittedNames.delete(admittedNameKey(pending.ip, pending.displayName));
       io.to(requestId).emit("join-denied", { by: session.currentPeer.displayName });
       console.log(
         `[ws] ${session.currentPeer.displayName} denied + banned ${requestId} (${pending.ip}) from ${room.name}`,

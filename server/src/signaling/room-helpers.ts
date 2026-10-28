@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Server, Socket } from "socket.io";
-import { removePeer, type Room, type Peer } from "../room-manager.js";
+import { admittedNameKey, removePeer, type Room, type Peer } from "../room-manager.js";
 import { decideMode } from "../recording-util.js";
 import { kickThreshold } from "../kick-util.js";
 import { allowed, voteIsAdminsOnly } from "../moderation-util.js";
@@ -397,7 +397,7 @@ export function createRoomHelpers(
       return;
     }
     if (target.ip) room.bannedIps.add(target.ip);
-    room.admittedNames.delete(target.displayName);
+    room.admittedNames.delete(admittedNameKey(target.ip, target.displayName));
     // A removed admin loses the role for good (their token too), so they can't
     // come back as an admin even if the ban doesn't catch them.
     if (target.token) room.adminTokens.delete(target.token);

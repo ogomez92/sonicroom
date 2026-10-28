@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getOrCreateRoom, getRooms, createPeer } from "../../room-manager.js";
+import { getOrCreateRoom, getRooms, createPeer, admittedNameKey } from "../../room-manager.js";
 import { verifyHostKey } from "../../reservations.js";
 import { decideMode } from "../../recording-util.js";
 import { notifyPublicRoomCreated, notifyPublicRoomJoin } from "../../notify.js";
@@ -91,7 +91,7 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
         (joinToken != null && room.adminTokens.has(joinToken)) || (isHost && role !== "caster");
       const alreadyAdmitted =
         (joinToken != null && room.admittedTokens.has(joinToken)) ||
-        room.admittedNames.has(displayName) ||
+        room.admittedNames.has(admittedNameKey(ip, displayName)) ||
         returningAdmin;
       const gated = wasPublic || room.moderation != null;
       if (gated && room.peers.size > 0 && role !== "caster" && !alreadyAdmitted) {
@@ -114,7 +114,7 @@ export function registerSessionHandlers(ctx: ConnectionContext) {
       // AND the display name so a later reconnect/refresh — or a return under
       // the same name after leaving — skips the gate; clear any knock state.
       if (joinToken != null) room.admittedTokens.add(joinToken);
-      room.admittedNames.add(displayName);
+      room.admittedNames.add(admittedNameKey(ip, displayName));
       session.pendingRequest = null;
 
       helpers.wireDucking(room);
