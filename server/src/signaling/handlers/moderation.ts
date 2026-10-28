@@ -181,7 +181,13 @@ export function registerModerationHandlers(ctx: ConnectionContext) {
         break;
       }
     }
-    if (!found || (found.source !== "share" && found.source !== "file" && found.source !== "mic")) {
+    if (
+      !found ||
+      (found.source !== "share" &&
+        found.source !== "file" &&
+        found.source !== "file-video" &&
+        found.source !== "mic")
+    ) {
       return cb?.({ ok: false, error: "not_a_stream" });
     }
     const { ownerId, owner, source } = found;
@@ -194,6 +200,18 @@ export function registerModerationHandlers(ctx: ConnectionContext) {
     if (source === "share") {
       for (const [id, prod] of owner.producers) {
         if ((prod.appData?.source as string) === "screen") {
+          prod.close();
+          owner.producers.delete(id);
+        }
+      }
+    }
+    // A streamed video file is one logical stream with a stereo "file"
+    // producer and a "file-video" picture producer. Moderating either half
+    // must stop both, just as a screen-share closes its paired producers.
+    if (source === "file" || source === "file-video") {
+      for (const [id, prod] of owner.producers) {
+        const pairedSource = prod.appData?.source as string;
+        if (pairedSource === "file" || pairedSource === "file-video") {
           prod.close();
           owner.producers.delete(id);
         }
@@ -214,7 +232,7 @@ export function registerModerationHandlers(ctx: ConnectionContext) {
     );
     if (!stillHas) {
       if (source === "share") room.sharers.delete(ownerId);
-      else if (source === "file") room.fileStreamers.delete(ownerId);
+      else if (source === "file" || source === "file-video") room.fileStreamers.delete(ownerId);
       else room.extraMicStreamers.delete(ownerId);
     }
 
@@ -224,7 +242,11 @@ export function registerModerationHandlers(ctx: ConnectionContext) {
 
     // One broadcast to the whole room: listeners tear down the tile, the owner
     // cleans up their own local playback/producer (keyed off ownerId === self).
-    io.to(room.name).emit("peer-stream-stopped", { ownerId, producerId, source });
+    io.to(room.name).emit("peer-stream-stopped", {
+      ownerId,
+      producerId,
+      source: source === "file-video" ? "file" : source,
+    });
     helpers.applyModeDecision(room);
     cb?.({ ok: true });
   });
