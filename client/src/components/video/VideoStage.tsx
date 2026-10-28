@@ -53,7 +53,7 @@ interface VideoStageProps {
 interface Entry {
   key: string;
   peerId: string;
-  source: "camera" | "screen";
+  source: VideoTile["source"];
   stream: MediaStream | null;
   label: string;
   mirrored: boolean;
@@ -170,8 +170,10 @@ export default function VideoStage({
   const nameOf = (peerId: string) => peers.get(peerId)?.displayName ?? "";
 
   const tiles: VideoTile[] = Array.from(videoTiles.values());
-  // Screens first (they're the thing being shown), then cameras.
-  tiles.sort((a, b) => (a.source === b.source ? 0 : a.source === "screen" ? -1 : 1));
+  // Screens and media files first (they're the thing being shown), then cameras.
+  tiles.sort((a, b) =>
+    a.source === b.source ? 0 : a.source === "camera" ? 1 : b.source === "camera" ? -1 : 0,
+  );
 
   const entries: Entry[] = tiles.map((tile) => ({
     key: tile.producerId,
@@ -181,9 +183,11 @@ export default function VideoStage({
     label:
       tile.source === "screen"
         ? m.video_tile_screen({ name: nameOf(tile.peerId) })
-        : m.video_tile_camera({ name: nameOf(tile.peerId) }),
+        : tile.source === "file-video"
+          ? m.file_stream_name({ name: nameOf(tile.peerId) })
+          : m.video_tile_camera({ name: nameOf(tile.peerId) }),
     mirrored: false,
-    isScreen: tile.source === "screen",
+    isScreen: tile.source !== "camera",
   }));
   if (localStream && localPeerId) {
     entries.push({
@@ -199,7 +203,9 @@ export default function VideoStage({
 
   // The pin resolves only while its producer is live; otherwise it just waits.
   const pinnedIdx = pinnedVideo
-    ? entries.findIndex((e) => isPinned(pinnedVideo, e.peerId, e.source))
+    ? entries.findIndex(
+        (e) => e.source !== "file-video" && isPinned(pinnedVideo, e.peerId, e.source),
+      )
     : -1;
   const pinnedEntry = pinnedIdx >= 0 ? entries[pinnedIdx] : null;
   const rest = pinnedEntry ? entries.filter((_, i) => i !== pinnedIdx) : entries;
@@ -316,7 +322,9 @@ export default function VideoStage({
     return isPinnedNow ? m.card_unpin_video({ name }) : m.card_pin_video({ name });
   };
 
-  const renderTile = (e: Entry, pinned: boolean, style?: CSSProperties) => (
+  const renderTile = (e: Entry, pinned: boolean, style?: CSSProperties) => {
+    const source = e.source;
+    return (
     <VideoTileView
       key={e.key}
       stream={e.stream}
@@ -325,10 +333,13 @@ export default function VideoStage({
       isScreen={e.isScreen}
       pinned={pinned}
       style={style}
-      onTogglePin={() => onTogglePin(e.peerId, e.source)}
+      onTogglePin={
+        source === "file-video" ? undefined : () => onTogglePin(e.peerId, source)
+      }
       pinLabel={pinLabelFor(e, pinned)}
     />
-  );
+    );
+  };
 
   const empty = entries.length === 0;
   return (
