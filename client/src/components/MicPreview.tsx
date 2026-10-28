@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, MicOff } from "lucide-react";
+import { Mic, MicOff, Minus, Plus } from "lucide-react";
 import { useRoomStore, MAX_MIC_GAIN } from "../stores/room";
 import { applySpeakerToContext } from "../lib/audio-devices";
 import { microphoneConstraints } from "../lib/microphone";
@@ -70,6 +70,32 @@ export function MicPreview() {
   // region that speaks band changes.
   const meterBoxRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLDivElement | null>(null);
+  // Band announcements pause until this time (performance.now clock) so they
+  // don't talk over the value spoken after a -/+ button press.
+  const quietUntilRef = useRef(0);
+
+  // -/+ buttons: a double-tap fallback for touch screen readers (iOS VoiceOver
+  // may not adjust the range by swipe). Always enabled, so focus is never lost
+  // at a limit; VoiceOver doesn't re-read a pressed button, so speak the value.
+  const nudgeMicGain = (delta: number) => {
+    const next = Math.round(Math.min(MAX_MIC_GAIN, Math.max(0, micGain + delta)) * 10) / 10;
+    setMicGain(next);
+    const value = next.toFixed(1);
+    const message =
+      next >= MAX_MIC_GAIN
+        ? m.mic_gain_maximum({ value })
+        : next <= 0
+          ? m.mic_gain_minimum({ value })
+          : m.mic_gain_valuetext({ value });
+    quietUntilRef.current = performance.now() + 1500;
+    const status = statusRef.current;
+    if (!status) return;
+    // Clear first so a repeated identical message is still spoken.
+    status.textContent = "";
+    requestAnimationFrame(() => {
+      status.textContent = message;
+    });
+  };
 
   // Live-apply slider changes to the preview gain while testing.
   useEffect(() => {
@@ -175,7 +201,7 @@ export function MicPreview() {
         box.setAttribute("aria-valuenow", String(pct));
         box.setAttribute("aria-valuetext", m.mic_valuetext({ pct, band: bandName(band) }));
       }
-      if (band !== lastBand && now - lastAnnounceAt > 1200) {
+      if (band !== lastBand && now - lastAnnounceAt > 1200 && now > quietUntilRef.current) {
         lastBand = band;
         lastAnnounceAt = now;
         const status = statusRef.current;
@@ -237,17 +263,36 @@ export function MicPreview() {
           {testing ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
           {testing ? m.mic_stop() : m.mic_test()}
         </button>
+        <button
+          type="button"
+          onClick={() => nudgeMicGain(-0.1)}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
+          aria-label={m.mic_gain_decrease()}
+        >
+          <Minus className="h-4 w-4" aria-hidden="true" />
+        </button>
         <input
           type="range"
           min="0"
           max={MAX_MIC_GAIN}
-          step="0.01"
+          // One step is one VoiceOver swipe on iOS (WebKit steps by `step`), so a
+          // finer step makes each swipe inaudible and the slider seem stuck.
+          step="0.1"
           value={micGain}
           onChange={(e) => setMicGain(parseFloat(e.target.value))}
           className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-sonic-600 accent-sonic-accent"
           aria-label={m.mic_slider_label()}
+          aria-valuetext={m.mic_gain_valuetext({ value: micGain.toFixed(1) })}
           aria-describedby="mic-help"
         />
+        <button
+          type="button"
+          onClick={() => nudgeMicGain(0.1)}
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-sonic-700 text-sonic-200 hover:bg-sonic-600"
+          aria-label={m.mic_gain_increase()}
+        >
+          <Plus className="h-4 w-4" aria-hidden="true" />
+        </button>
       </div>
 
       {/* Live level meter — only animates while testing. role="meter" lets a
