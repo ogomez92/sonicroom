@@ -10,6 +10,7 @@ import {
   requestFullscreen,
 } from "../../lib/video/fullscreen";
 import { m } from "../../paraglide/messages.js";
+import type { VideoSource } from "../../lib/video/video-media";
 
 // The video grid for a VIDEO room: our own camera (mirrored, like a mirror —
 // never audible: the mic goes through the audio graph) plus one tile per
@@ -41,7 +42,7 @@ interface VideoStageProps {
   // Pin/unpin a camera or screen. Comes from Room (the SAME handler the
   // participant list's Pin option uses) so the tile button and the menu take
   // one code path — including the announcement.
-  onTogglePin: (peerId: string, source: "camera" | "screen") => void;
+  onTogglePin: (peerId: string, source: VideoSource) => void;
   // Bumped by Room's E shortcut to toggle fullscreen — the room's single
   // keydown handler can't reach this section's element, so it signals instead
   // (same shape as Chat's focusSignal).
@@ -53,7 +54,7 @@ interface VideoStageProps {
 interface Entry {
   key: string;
   peerId: string;
-  source: "camera" | "screen";
+  source: VideoSource;
   stream: MediaStream | null;
   label: string;
   mirrored: boolean;
@@ -170,8 +171,10 @@ export default function VideoStage({
   const nameOf = (peerId: string) => peers.get(peerId)?.displayName ?? "";
 
   const tiles: VideoTile[] = Array.from(videoTiles.values());
-  // Screens first (they're the thing being shown), then cameras.
-  tiles.sort((a, b) => (a.source === b.source ? 0 : a.source === "screen" ? -1 : 1));
+  // Screens and media files first (they're the thing being shown), then cameras.
+  tiles.sort((a, b) =>
+    a.source === b.source ? 0 : a.source === "camera" ? 1 : b.source === "camera" ? -1 : 0,
+  );
 
   const entries: Entry[] = tiles.map((tile) => ({
     key: tile.producerId,
@@ -181,9 +184,12 @@ export default function VideoStage({
     label:
       tile.source === "screen"
         ? m.video_tile_screen({ name: nameOf(tile.peerId) })
-        : m.video_tile_camera({ name: nameOf(tile.peerId) }),
+        : tile.source === "file-video"
+          ? m.file_stream_name({ name: nameOf(tile.peerId) })
+          : m.video_tile_camera({ name: nameOf(tile.peerId) }),
     mirrored: false,
-    isScreen: tile.source === "screen",
+    // A shared media file is shown content, laid out like a screen share.
+    isScreen: tile.source !== "camera",
   }));
   if (localStream && localPeerId) {
     entries.push({
