@@ -1331,6 +1331,11 @@ export function useMediasoup() {
           type: "offer" | "answer" | "ice-candidate";
           payload: RTCSessionDescriptionInit | RTCIceCandidateInit;
         }) => {
+          // Only talk to peers we know. Safe against the join race: the server
+          // sends us `peer-joined` (same socket, so ordered) before the
+          // newcomer's offer, and as the newcomer we add the join snapshot's
+          // peers before offering. Anything else would get our mic answered back.
+          if (!store.getState().peers.has(fromPeerId)) return;
           if (type === "offer") {
             // Candidates already queued for this peer belong to a previous
             // session — a session's candidates always arrive after its offer —

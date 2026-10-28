@@ -189,6 +189,7 @@ describe("P2P signaling relay", () => {
   it("answers an incoming offer (as the answerer)", async () => {
     const h = await joinRoom({ join: { mode: "p2p", peers: [] } });
 
+    await fire("peer-joined", { peerId: "id-carol", displayName: "Carol" });
     await fire("p2p-signal", {
       fromPeerId: "id-carol",
       type: "offer",
@@ -203,6 +204,19 @@ describe("P2P signaling relay", () => {
     const answer = socket().lastSent("p2p-signal") as { type: string; targetPeerId: string };
     expect(answer.type).toBe("answer");
     expect(answer.targetPeerId).toBe("id-carol");
+    h.unmount();
+  });
+
+  it("ignores an offer from a peer that is not in the room", async () => {
+    const h = await joinRoom({ join: { mode: "p2p", peers: [] } });
+    await fire("p2p-signal", {
+      fromPeerId: "id-stranger",
+      type: "offer",
+      payload: { type: "offer", sdp: "m=audio\r\na=fmtp:111 minptime=10\r\n" },
+    });
+    // No answerer PC built, so our mic was never sent back.
+    expect(FakeRTCPeerConnection.instances).toHaveLength(0);
+    expect(socket().sentEvents("p2p-signal")).toHaveLength(0);
     h.unmount();
   });
 
