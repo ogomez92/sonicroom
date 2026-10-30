@@ -12,12 +12,14 @@ export function DeviceSettings() {
   const micDeviceId = useRoomStore((s) => s.micDeviceId);
   const speakerDeviceId = useRoomStore((s) => s.speakerDeviceId);
   const voiceProcessingEnabled = useRoomStore((s) => s.voiceProcessingEnabled);
+  const loudnessBoostEnabled = useRoomStore((s) => s.loudnessBoostEnabled);
   const hifiVoiceEnabled = useRoomStore((s) => s.hifiVoiceEnabled);
   const streamedMicDeviceIds = useRoomStore((s) => s.streamedMicDeviceIds);
   const micStereoByDevice = useRoomStore((s) => s.micStereoByDevice);
   const setMicDeviceId = useRoomStore((s) => s.setMicDeviceId);
   const setSpeakerDeviceId = useRoomStore((s) => s.setSpeakerDeviceId);
   const setVoiceProcessingEnabled = useRoomStore((s) => s.setVoiceProcessingEnabled);
+  const setLoudnessBoostEnabled = useRoomStore((s) => s.setLoudnessBoostEnabled);
   const setHifiVoiceEnabled = useRoomStore((s) => s.setHifiVoiceEnabled);
   const setStreamedMicDeviceIds = useRoomStore((s) => s.setStreamedMicDeviceIds);
   const setMicStereoForDevice = useRoomStore((s) => s.setMicStereoForDevice);
@@ -28,6 +30,7 @@ export function DeviceSettings() {
   const micHintId = useId();
   const speakerSelectId = useId();
   const voiceProcessingId = useId();
+  const loudnessBoostId = useId();
   const hifiVoiceId = useId();
   const extraMicsId = useId();
 
@@ -140,6 +143,28 @@ export function DeviceSettings() {
         </label>
         <p id={`${voiceProcessingId}-hint`} className="mt-1 pl-[26px] text-xs text-sonic-400">
           {m.settings_voice_processing_hint()}
+        </p>
+      </div>
+
+      <div>
+        <label
+          htmlFor={loudnessBoostId}
+          className="flex cursor-pointer select-none items-center gap-2.5"
+        >
+          <input
+            id={loudnessBoostId}
+            type="checkbox"
+            checked={loudnessBoostEnabled}
+            onChange={(e) => setLoudnessBoostEnabled(e.target.checked)}
+            aria-describedby={`${loudnessBoostId}-hint`}
+            className="h-4 w-4 rounded border-sonic-600 bg-sonic-700 accent-sonic-accent"
+          />
+          <span className="text-xs font-medium text-sonic-300">
+            {m.settings_loudness_boost_label()}
+          </span>
+        </label>
+        <p id={`${loudnessBoostId}-hint`} className="mt-1 pl-[26px] text-xs text-sonic-400">
+          {m.settings_loudness_boost_hint()}
         </p>
       </div>
 

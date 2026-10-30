@@ -46,6 +46,20 @@ describe("OutgoingAudioGraph", () => {
     expect(useRoomStore.getState().micGain).toBe(2.5);
   });
 
+  it("routes the mic through the loudness boost only while it is on", () => {
+    const { graph } = makeGraph();
+    graph.ensure();
+    const nodes = graph as unknown as Record<string, { connectedTo: unknown[] }>;
+    expect(nodes.micGain.connectedTo).toEqual([nodes.limiter]);
+    graph.setLoudnessBoost(true);
+    expect(nodes.micGain.connectedTo).toEqual([nodes.loudnessBoost]);
+    // pre-gain → compressor → limiter
+    const compressor = nodes.loudnessBoost.connectedTo[0] as { connectedTo: unknown[] };
+    expect(compressor.connectedTo).toEqual([nodes.limiter]);
+    graph.setLoudnessBoost(false);
+    expect(nodes.micGain.connectedTo).toEqual([nodes.limiter]);
+  });
+
   it("persists the stream monitor volume to the store", () => {
     const { graph } = makeGraph();
     graph.setStreamMonitorVolume(0.3);
