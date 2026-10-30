@@ -3,7 +3,7 @@ import { lookup } from "node:dns/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
-import { tmpdir } from "node:os";
+import { setPriority, tmpdir } from "node:os";
 import path from "node:path";
 import { Transform, type Readable } from "node:stream";
 
@@ -363,6 +363,23 @@ export function buildFfmpegStreamArgs(url: string): string[] {
   ];
 }
 
+// Niceness for on-demand ffmpeg/yt-dlp work (URL transcodes, download renders).
+// They are children of the server, so they inherit its realtime-leaning
+// priority (e.g. a unit's Nice=-10) and a burst of them could starve live
+// media. Raising niceness needs no privilege.
+const BATCH_NICENESS = 10;
+
+export function lowerPriority<T extends { pid?: number }>(proc: T): T {
+  if (proc.pid != null) {
+    try {
+      setPriority(proc.pid, BATCH_NICENESS);
+    } catch {
+      // Process already gone, or the platform refuses — not worth failing over.
+    }
+  }
+  return proc;
+}
+
 // Collect the tail of one or more processes' stderr, for failure diagnostics
 // (private video, unsupported URL, geo-block, dead stream…).
 function captureStderr(...procs: ChildProcess[]): () => string {
@@ -384,6 +401,7 @@ async function gateTranscodedAudio(
   readDiagnostics: () => string,
   firstByteTimeoutMs: number,
 ): Promise<YtDlpExtraction> {
+  for (const proc of pipeline) lowerPriority(proc);
   let destroyed = false;
   const destroy = () => {
     if (destroyed) return;
