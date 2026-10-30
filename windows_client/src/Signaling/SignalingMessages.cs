@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SonicRoom.Windows.Session;
 
 namespace SonicRoom.Windows.Signaling;
 
@@ -27,6 +28,14 @@ public sealed class JoinRequest
     public bool FileStreaming { get; init; }
     public bool ExtraMic { get; init; }
 
+    /// <summary>Host key of a RESERVED room (from the host link's <c>?host=</c>). Required to OPEN a
+    /// reserved room; on any join it also makes us an admin and skips the knock gate.</summary>
+    public string? HostKey { get; init; }
+
+    /// <summary>Create the room as a MODERATED room with this policy. Honoured only when this join
+    /// CREATES the room (the creator becomes its admin); ignored on an existing room.</summary>
+    public ModerationPolicy? Moderation { get; init; }
+
     /// <summary>
     /// Build the exact wire object. Optional fields are OMITTED (not sent as null) because the
     /// server's zod schema treats them as <c>.optional()</c> (undefined ok, null rejected).
@@ -43,7 +52,11 @@ public sealed class JoinRequest
             ["disableP2p"] = true, // native client is SFU-only
         };
         if (r.IsPublic is bool p) d["isPublic"] = p;
-        if (!string.IsNullOrEmpty(r.JoinToken)) d["joinToken"] = r.JoinToken;
+        // IsNullOrWhiteSpace, not IsNullOrEmpty: a whitespace-only key would still be SENT and the
+        // server would score it as a wrong key rather than an ordinary join with no key at all.
+        if (!string.IsNullOrWhiteSpace(r.JoinToken)) d["joinToken"] = r.JoinToken;
+        if (!string.IsNullOrWhiteSpace(r.HostKey)) d["hostKey"] = r.HostKey;
+        if (r.Moderation is not null) d["moderation"] = r.Moderation;
         if (r.Sharing) d["sharing"] = true;
         if (r.FileStreaming) d["fileStreaming"] = true;
         if (r.ExtraMic) d["extraMic"] = true;
@@ -69,7 +82,28 @@ public sealed class JoinAck
     [JsonPropertyName("kickVotes")] public List<KickVoteTally>? KickVotes { get; set; }
     [JsonPropertyName("messages")] public List<ChatMessage>? Messages { get; set; }
 
+    // ---- shared notes (NoteLab) ----------------------------------------------------------
+    /// <summary>Whether this instance has NOTELAB_URL configured. False hides the Notes control.</summary>
+    [JsonPropertyName("notesEnabled")] public bool NotesEnabled { get; set; }
+    /// <summary>This room's note URL if one exists yet — null unless we are allowed to have it
+    /// (in a moderated room the server nulls it for a denied peer, since the link IS access).</summary>
+    [JsonPropertyName("notesUrl")] public string? NotesUrl { get; set; }
+
+    // ---- moderated rooms -----------------------------------------------------------------
+    /// <summary>The room's fixed policy; null for an ordinary private/public room.</summary>
+    [JsonPropertyName("moderation")] public ModerationPolicy? Moderation { get; set; }
+    /// <summary>Whether WE are an admin of this moderated room.</summary>
+    [JsonPropertyName("isAdmin")] public bool IsAdmin { get; set; }
+    /// <summary>Who the admins are (ids + names).</summary>
+    [JsonPropertyName("admins")] public List<AdminInfo>? Admins { get; set; }
+
+    // ---- reserved rooms ------------------------------------------------------------------
+    /// <summary>Whether this room name is reserved (host-keyed). Carried on 404 too, so a client
+    /// can tell "wait for the host" from "nobody is here".</summary>
+    [JsonPropertyName("reserved")] public bool Reserved { get; set; }
+
     public bool IsPending => Status == "pending";
+    public bool IsModerated => Moderation is not null;
 }
 
 public sealed class PeerInfo
@@ -227,7 +261,9 @@ public sealed class PeerKicked
 {
     [JsonPropertyName("peerId")] public string PeerId { get; set; } = "";
     [JsonPropertyName("displayName")] public string DisplayName { get; set; } = "";
-    [JsonPropertyName("reason")] public string Reason { get; set; } = "vote"; // vote|caster
+    // "vote" (public room) | "caster" | "admin" (a moderated room's direct admin kick)
+    [JsonPropertyName("reason")] public string Reason { get; set; } = "vote";
+    [JsonPropertyName("by")] public string? By { get; set; }
 }
 
 public sealed class JoinRequestsMsg
@@ -244,4 +280,34 @@ public sealed class JoinRequestItem
 public sealed class JoinDenied
 {
     [JsonPropertyName("by")] public string? By { get; set; }
+}
+
+// ---- shared notes (NoteLab) ----------------------------------------------------------------
+
+/// <summary>The <c>open-notes</c> ack: the room's note URL (created on first use).</summary>
+public sealed class OpenNotesAck
+{
+    [JsonPropertyName("ok")] public bool Ok { get; set; }
+    [JsonPropertyName("error")] public string? Error { get; set; }
+    [JsonPropertyName("url")] public string? Url { get; set; }
+}
+
+/// <summary>Someone created the room's note; everyone else may open it from now on.</summary>
+public sealed class NotesUpdated
+{
+    [JsonPropertyName("url")] public string Url { get; set; } = "";
+    [JsonPropertyName("by")] public string? By { get; set; }
+}
+
+/// <summary>Our voice producer was force-paused by an admin (a SOFT mute — we may unmute).</summary>
+public sealed class YouWereMutedMsg
+{
+    [JsonPropertyName("by")] public string? By { get; set; }
+}
+
+/// <summary>Room-wide force mute by an admin (<c>all-muted</c>).</summary>
+public sealed class AllMutedMsg
+{
+    [JsonPropertyName("by")] public string? By { get; set; }
+    [JsonPropertyName("count")] public int Count { get; set; }
 }
