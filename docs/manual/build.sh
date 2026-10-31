@@ -24,6 +24,7 @@ toc_title() {
     en) echo "Contents" ;;
     es) echo "Contenido" ;;
     fr) echo "Sommaire" ;;
+    sk) echo "Obsah" ;;
   esac
 }
 back_label() {
@@ -31,6 +32,7 @@ back_label() {
     en) echo "Back to SonicRoom" ;;
     es) echo "Volver a SonicRoom" ;;
     fr) echo "Retour à SonicRoom" ;;
+    sk) echo "Späť do SonicRoom" ;;
   esac
 }
 langs_label() {
@@ -38,6 +40,7 @@ langs_label() {
     en) echo "Other languages:" ;;
     es) echo "Otros idiomas:" ;;
     fr) echo "Autres langues :" ;;
+    sk) echo "Ďalšie jazyky:" ;;
   esac
 }
 nav_label() {
@@ -45,6 +48,7 @@ nav_label() {
     en) echo "Manual navigation" ;;
     es) echo "Navegación del manual" ;;
     fr) echo "Navigation du manuel" ;;
+    sk) echo "Navigácia v manuály" ;;
   esac
 }
 native_name() {
@@ -52,10 +56,11 @@ native_name() {
     en) echo "English" ;;
     es) echo "Español" ;;
     fr) echo "Français" ;;
+    sk) echo "Slovenčina" ;;
   esac
 }
 
-ALL_LANGS=(en es fr)
+ALL_LANGS=(en es fr sk)
 
 for lang in "${ALL_LANGS[@]}"; do
   nav="$(mktemp)"
